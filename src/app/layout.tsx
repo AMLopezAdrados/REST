@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
-import { SessionProvider } from 'next-auth/react';
 import { getServerSession } from 'next-auth';
 import { authOptions } from './api/auth/[...nextauth]/route';
+import Providers from './providers';
 import '@/styles/globals.css';
 
 export const metadata: Metadata = {
@@ -9,12 +9,17 @@ export const metadata: Metadata = {
   description: 'Email has existed for 30 years. Nobody changed it. Until now.',
 };
 
-export default async function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const session = await getServerSession(authOptions);
+
   return (
     <html lang="en">
       <body>
-        <SessionProvider session={session}>{children}</SessionProvider>
+        <Providers session={session}>{children}</Providers>
       </body>
     </html>
   );
