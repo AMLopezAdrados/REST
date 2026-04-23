@@ -1,9 +1,168 @@
-import { getDb } from './db';
+import fs from 'node:fs';
+import path from 'node:path';
 import crypto from 'node:crypto';
 import type { RawEmail, NormalizedEmail } from '@/types/email';
 import type { Classification, MainCategory, IntentData } from '@/types/classification';
 import type { TopicNode, NodeStatus, Sector } from '@/types/node';
 import type { ContextEntity, EntityType } from '@/types/context';
+
+// ---------- JSON store ----------
+
+interface Store {
+  users: UserRow[];
+  raw_emails: RawEmailRow[];
+  classifications: ClassificationRow[];
+  nodes: NodeRow[];
+  node_emails: NodeEmailRow[];
+  context_entities: ContextEntityRow[];
+  sync_progress: SyncProgressRow[];
+}
+
+interface UserRow {
+  id: string;
+  email: string;
+  refresh_token: string;          // encrypted
+  access_token: string | null;
+  token_expiry: number | null;
+  created_at: number;
+  last_sync: number | null;
+}
+
+interface RawEmailRow {
+  id: string;
+  user_id: string;
+  gmail_id: string;
+  thread_id: string | null;
+  received_at: number;
+  from_email: string;
+  from_name: string | null;
+  to_emails: string | null;       // JSON string
+  subject: string | null;
+  body_plaintext: string | null;
+  body_html: string | null;
+  labels: string | null;          // JSON string
+  consumption_state: string;
+  consumed_at: number | null;
+  consumed_via: string | null;
+}
+
+interface ClassificationRow {
+  email_id: string;
+  main_category: string;
+  subcategory: string | null;
+  extracted_data: string | null;   // JSON string
+  intent_data: string | null;     // JSON string
+  confidence: number;
+  classified_at: number;
+  classifier_version: string;
+  user_corrected: number;         // 0 | 1
+}
+
+interface NodeRow {
+  id: string;
+  user_id: string;
+  title: string;
+  summary: string | null;
+  category: string | null;
+  sector: string;
+  position_x: number;
+  position_y: number;
+  urgency_score: number;
+  status: string;
+  email_count: number;
+  last_activity: number;
+  created_at: number;
+}
+
+interface NodeEmailRow {
+  node_id: string;
+  email_id: string;
+}
+
+interface ContextEntityRow {
+  id: string;
+  user_id: string;
+  entity_type: string;
+  data: string;                    // JSON string
+  confidence: number;
+  user_confirmed: number;         // 0 | 1
+  created_at: number;
+}
+
+interface SyncProgressRow {
+  user_id: string;
+  status: string;
+  total: number;
+  processed: number;
+  classified: number;
+  started_at: number | null;
+  updated_at: number | null;
+}
+
+const DATA_DIR = path.join(process.cwd(), '.data');
+const STORE_PATH = path.join(DATA_DIR, 'rest-store.json');
+
+function emptyStore(): Store {
+  return {
+    users: [],
+    raw_emails: [],
+    classifications: [],
+    nodes: [],
+    node_emails: [],
+    context_entities: [],
+    sync_progress: [],
+  };
+}
+
+function readStore(): Store {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(STORE_PATH)) {
+    const empty = emptyStore();
+    writeStore(empty);
+    return empty;
+  }
+  try {
+    const raw = fs.readFileSync(STORE_PATH, 'utf-8');
+    const parsed = JSON.parse(raw) as Partial<Store>;
+    // Ensure all keys exist
+    const base = emptyStore();
+    return {
+      users: parsed.users ?? base.users,
+      raw_emails: parsed.raw_emails ?? base.raw_emails,
+      classifications: parsed.classifications ?? base.classifications,
+      nodes: parsed.nodes ?? base.nodes,
+      node_emails: parsed.node_emails ?? base.node_emails,
+      context_entities: parsed.context_entities ?? base.context_entities,
+      sync_progress: parsed.sync_progress ?? base.sync_progress,
+    };
+  } catch {
+    return emptyStore();
+  }
+}
+
+function writeStore(store: Store) {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  const json = JSON.stringify(store, null, 2);
+  // Atomic-ish write: write to temp file in same directory, then rename
+  const tmpPath = path.join(DATA_DIR, `rest-store.tmp.${process.pid}.${Date.now()}`);
+  fs.writeFileSync(tmpPath, json, 'utf-8');
+  fs.renameSync(tmpPath, STORE_PATH);
+}
+
+function mutate(fn: (store: Store) => void): void {
+  const store = readStore();
+  fn(store);
+  writeStore(store);
+}
+
+function query<T>(fn: (store: Store) => T): T {
+  const store = readStore();
+  return fn(store);
+}
 
 // ---------- encryption for refresh tokens ----------
 
@@ -40,277 +199,326 @@ export function upsertUser(params: {
   accessToken?: string | null;
   tokenExpiry?: number | null;
 }): string {
-  const db = getDb();
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(params.email) as { id: string } | undefined;
   const encryptedRefresh = encrypt(params.refreshToken);
   const now = Date.now();
+  let resultId = '';
 
-  if (existing) {
-    db.prepare(
-      `UPDATE users SET refresh_token = ?, access_token = ?, token_expiry = ? WHERE id = ?`
-    ).run(encryptedRefresh, params.accessToken ?? null, params.tokenExpiry ?? null, existing.id);
-    return existing.id;
-  }
+  mutate((store) => {
+    const existing = store.users.find((u) => u.email === params.email);
+    if (existing) {
+      existing.refresh_token = encryptedRefresh;
+      existing.access_token = params.accessToken ?? null;
+      existing.token_expiry = params.tokenExpiry ?? null;
+      resultId = existing.id;
+    } else {
+      const id = params.id ?? crypto.randomUUID();
+      store.users.push({
+        id,
+        email: params.email,
+        refresh_token: encryptedRefresh,
+        access_token: params.accessToken ?? null,
+        token_expiry: params.tokenExpiry ?? null,
+        created_at: now,
+        last_sync: null,
+      });
+      resultId = id;
+    }
+  });
 
-  const id = params.id ?? crypto.randomUUID();
-  db.prepare(
-    `INSERT INTO users (id, email, refresh_token, access_token, token_expiry, created_at) VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, params.email, encryptedRefresh, params.accessToken ?? null, params.tokenExpiry ?? null, now);
-  return id;
+  return resultId;
 }
 
 export function getUserByEmail(email: string) {
-  const db = getDb();
-  const row = db.prepare('SELECT * FROM users WHERE email = ?').get(email) as any;
-  if (!row) return null;
-  return {
-    ...row,
-    refresh_token: decrypt(row.refresh_token),
-  };
+  return query((store) => {
+    const row = store.users.find((u) => u.email === email);
+    if (!row) return null;
+    return {
+      ...row,
+      refresh_token: decrypt(row.refresh_token),
+    };
+  });
 }
 
 export function getUserById(id: string) {
-  const db = getDb();
-  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as any;
-  if (!row) return null;
-  return {
-    ...row,
-    refresh_token: decrypt(row.refresh_token),
-  };
+  return query((store) => {
+    const row = store.users.find((u) => u.id === id);
+    if (!row) return null;
+    return {
+      ...row,
+      refresh_token: decrypt(row.refresh_token),
+    };
+  });
 }
 
 export function updateUserTokens(userId: string, accessToken: string, expiry: number) {
-  getDb().prepare('UPDATE users SET access_token = ?, token_expiry = ? WHERE id = ?').run(accessToken, expiry, userId);
+  mutate((store) => {
+    const user = store.users.find((u) => u.id === userId);
+    if (user) {
+      user.access_token = accessToken;
+      user.token_expiry = expiry;
+    }
+  });
 }
 
 export function updateLastSync(userId: string) {
-  getDb().prepare('UPDATE users SET last_sync = ? WHERE id = ?').run(Date.now(), userId);
+  mutate((store) => {
+    const user = store.users.find((u) => u.id === userId);
+    if (user) {
+      user.last_sync = Date.now();
+    }
+  });
 }
 
 // ---------- raw emails ----------
 
 export function insertEmail(userId: string, email: NormalizedEmail): string {
-  const db = getDb();
-  const existing = db.prepare('SELECT id FROM raw_emails WHERE user_id = ? AND gmail_id = ?').get(userId, email.gmail_id) as
-    | { id: string }
-    | undefined;
-  if (existing) return existing.id;
+  let resultId = '';
 
-  const id = crypto.randomUUID();
-  db.prepare(
-    `INSERT INTO raw_emails (id, user_id, gmail_id, thread_id, received_at, from_email, from_name, to_emails, subject, body_plaintext, body_html, labels)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    id,
-    userId,
-    email.gmail_id,
-    email.thread_id,
-    email.received_at,
-    email.from_email,
-    email.from_name,
-    JSON.stringify(email.to_emails),
-    email.subject,
-    email.body_plaintext,
-    email.body_html,
-    JSON.stringify(email.labels)
-  );
-  return id;
+  mutate((store) => {
+    // Avoid duplicates by user_id + gmail_id
+    const existing = store.raw_emails.find(
+      (e) => e.user_id === userId && e.gmail_id === email.gmail_id
+    );
+    if (existing) {
+      resultId = existing.id;
+      return;
+    }
+
+    const id = crypto.randomUUID();
+    store.raw_emails.push({
+      id,
+      user_id: userId,
+      gmail_id: email.gmail_id,
+      thread_id: email.thread_id,
+      received_at: email.received_at,
+      from_email: email.from_email,
+      from_name: email.from_name,
+      to_emails: JSON.stringify(email.to_emails),
+      subject: email.subject,
+      body_plaintext: email.body_plaintext,
+      body_html: email.body_html,
+      labels: JSON.stringify(email.labels),
+      consumption_state: 'unseen',
+      consumed_at: null,
+      consumed_via: null,
+    });
+    resultId = id;
+  });
+
+  return resultId;
 }
 
 export function getEmailsForUser(userId: string, limit = 500): RawEmail[] {
-  return getDb()
-    .prepare(
-      `SELECT * FROM raw_emails WHERE user_id = ? ORDER BY received_at DESC LIMIT ?`
-    )
-    .all(userId, limit) as RawEmail[];
+  return query((store) => {
+    return store.raw_emails
+      .filter((e) => e.user_id === userId)
+      .sort((a, b) => b.received_at - a.received_at)
+      .slice(0, limit) as unknown as RawEmail[];
+  });
 }
 
 export function getEmailById(id: string): RawEmail | null {
-  return (getDb().prepare('SELECT * FROM raw_emails WHERE id = ?').get(id) as RawEmail) ?? null;
+  return query((store) => {
+    return (store.raw_emails.find((e) => e.id === id) as unknown as RawEmail) ?? null;
+  });
 }
 
 export function getEmailsByThread(userId: string, threadId: string): RawEmail[] {
-  return getDb()
-    .prepare(
-      'SELECT * FROM raw_emails WHERE user_id = ? AND thread_id = ? ORDER BY received_at ASC'
-    )
-    .all(userId, threadId) as RawEmail[];
+  return query((store) => {
+    return store.raw_emails
+      .filter((e) => e.user_id === userId && e.thread_id === threadId)
+      .sort((a, b) => a.received_at - b.received_at) as unknown as RawEmail[];
+  });
 }
 
 export function setConsumptionState(emailId: string, state: 'unseen' | 'implicit' | 'confirmed', via?: string) {
-  getDb()
-    .prepare('UPDATE raw_emails SET consumption_state = ?, consumed_at = ?, consumed_via = ? WHERE id = ?')
-    .run(state, state === 'unseen' ? null : Date.now(), via ?? null, emailId);
+  mutate((store) => {
+    const email = store.raw_emails.find((e) => e.id === emailId);
+    if (email) {
+      email.consumption_state = state;
+      email.consumed_at = state === 'unseen' ? null : Date.now();
+      email.consumed_via = via ?? null;
+    }
+  });
 }
 
 // ---------- classifications ----------
 
 export function upsertClassification(c: Classification) {
-  getDb()
-    .prepare(
-      `INSERT INTO classifications (email_id, main_category, subcategory, extracted_data, intent_data, confidence, classified_at, classifier_version, user_corrected)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(email_id) DO UPDATE SET
-         main_category = excluded.main_category,
-         subcategory = excluded.subcategory,
-         extracted_data = excluded.extracted_data,
-         intent_data = excluded.intent_data,
-         confidence = excluded.confidence,
-         classified_at = excluded.classified_at,
-         classifier_version = excluded.classifier_version`
-    )
-    .run(
-      c.email_id,
-      c.main_category,
-      c.subcategory,
-      c.extracted_data ? JSON.stringify(c.extracted_data) : null,
-      c.intent_data ? JSON.stringify(c.intent_data) : null,
-      c.confidence,
-      c.classified_at,
-      c.classifier_version,
-      c.user_corrected ? 1 : 0
-    );
+  mutate((store) => {
+    const idx = store.classifications.findIndex((cl) => cl.email_id === c.email_id);
+    const row: ClassificationRow = {
+      email_id: c.email_id,
+      main_category: c.main_category,
+      subcategory: c.subcategory,
+      extracted_data: c.extracted_data ? JSON.stringify(c.extracted_data) : null,
+      intent_data: c.intent_data ? JSON.stringify(c.intent_data) : null,
+      confidence: c.confidence,
+      classified_at: c.classified_at,
+      classifier_version: c.classifier_version,
+      user_corrected: c.user_corrected ? 1 : 0,
+    };
+    if (idx >= 0) {
+      store.classifications[idx] = row;
+    } else {
+      store.classifications.push(row);
+    }
+  });
 }
 
 export function getClassification(emailId: string): Classification | null {
-  const row = getDb().prepare('SELECT * FROM classifications WHERE email_id = ?').get(emailId) as any;
-  if (!row) return null;
-  return {
-    ...row,
-    extracted_data: row.extracted_data ? JSON.parse(row.extracted_data) : null,
-    intent_data: row.intent_data ? JSON.parse(row.intent_data) : null,
-    user_corrected: !!row.user_corrected,
-  };
+  return query((store) => {
+    const row = store.classifications.find((c) => c.email_id === emailId);
+    if (!row) return null;
+    return {
+      ...row,
+      main_category: row.main_category as MainCategory,
+      extracted_data: row.extracted_data ? JSON.parse(row.extracted_data) : null,
+      intent_data: row.intent_data ? JSON.parse(row.intent_data) : null,
+      user_corrected: !!row.user_corrected,
+    } as Classification;
+  });
 }
 
 export function getUnclassifiedEmails(userId: string, limit = 1000): RawEmail[] {
-  return getDb()
-    .prepare(
-      `SELECT e.* FROM raw_emails e
-       LEFT JOIN classifications c ON c.email_id = e.id
-       WHERE e.user_id = ? AND c.email_id IS NULL
-       ORDER BY e.received_at DESC
-       LIMIT ?`
-    )
-    .all(userId, limit) as RawEmail[];
+  return query((store) => {
+    const classifiedEmailIds = new Set(store.classifications.map((c) => c.email_id));
+    return store.raw_emails
+      .filter((e) => e.user_id === userId && !classifiedEmailIds.has(e.id))
+      .sort((a, b) => b.received_at - a.received_at)
+      .slice(0, limit) as unknown as RawEmail[];
+  });
 }
 
 // ---------- nodes ----------
 
 export function upsertNode(n: Omit<TopicNode, 'created_at'> & { created_at?: number }): string {
-  const db = getDb();
   const now = Date.now();
-  const existing = db.prepare('SELECT id FROM nodes WHERE id = ?').get(n.id);
-  if (existing) {
-    db.prepare(
-      `UPDATE nodes SET title = ?, summary = ?, category = ?, sector = ?, position_x = ?, position_y = ?, urgency_score = ?, status = ?, email_count = ?, last_activity = ? WHERE id = ?`
-    ).run(
-      n.title,
-      n.summary,
-      n.category,
-      n.sector,
-      n.position_x,
-      n.position_y,
-      n.urgency_score,
-      n.status,
-      n.email_count,
-      n.last_activity,
-      n.id
-    );
-    return n.id;
-  }
-  db.prepare(
-    `INSERT INTO nodes (id, user_id, title, summary, category, sector, position_x, position_y, urgency_score, status, email_count, last_activity, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    n.id,
-    n.user_id,
-    n.title,
-    n.summary,
-    n.category,
-    n.sector,
-    n.position_x,
-    n.position_y,
-    n.urgency_score,
-    n.status,
-    n.email_count,
-    n.last_activity,
-    n.created_at ?? now
-  );
+
+  mutate((store) => {
+    const idx = store.nodes.findIndex((node) => node.id === n.id);
+    const row: NodeRow = {
+      id: n.id,
+      user_id: n.user_id,
+      title: n.title,
+      summary: n.summary ?? null,
+      category: n.category ?? null,
+      sector: n.sector,
+      position_x: n.position_x,
+      position_y: n.position_y,
+      urgency_score: n.urgency_score,
+      status: n.status,
+      email_count: n.email_count,
+      last_activity: n.last_activity,
+      created_at: n.created_at ?? now,
+    };
+    if (idx >= 0) {
+      // Preserve original created_at on update
+      row.created_at = store.nodes[idx].created_at;
+      store.nodes[idx] = row;
+    } else {
+      store.nodes.push(row);
+    }
+  });
+
   return n.id;
 }
 
 export function getNodesForUser(userId: string): TopicNode[] {
-  return getDb()
-    .prepare('SELECT * FROM nodes WHERE user_id = ? ORDER BY urgency_score DESC')
-    .all(userId) as TopicNode[];
+  return query((store) => {
+    return store.nodes
+      .filter((n) => n.user_id === userId)
+      .sort((a, b) => b.urgency_score - a.urgency_score) as unknown as TopicNode[];
+  });
 }
 
 export function getNodeById(id: string): TopicNode | null {
-  return (getDb().prepare('SELECT * FROM nodes WHERE id = ?').get(id) as TopicNode) ?? null;
+  return query((store) => {
+    return (store.nodes.find((n) => n.id === id) as unknown as TopicNode) ?? null;
+  });
 }
 
 export function linkEmailToNode(nodeId: string, emailId: string) {
-  getDb()
-    .prepare('INSERT OR IGNORE INTO node_emails (node_id, email_id) VALUES (?, ?)')
-    .run(nodeId, emailId);
+  mutate((store) => {
+    // Avoid duplicates by node_id + email_id
+    const exists = store.node_emails.some(
+      (ne) => ne.node_id === nodeId && ne.email_id === emailId
+    );
+    if (!exists) {
+      store.node_emails.push({ node_id: nodeId, email_id: emailId });
+    }
+  });
 }
 
 export function getEmailsForNode(nodeId: string): RawEmail[] {
-  return getDb()
-    .prepare(
-      `SELECT e.* FROM raw_emails e
-       JOIN node_emails ne ON ne.email_id = e.id
-       WHERE ne.node_id = ?
-       ORDER BY e.received_at DESC`
-    )
-    .all(nodeId) as RawEmail[];
+  return query((store) => {
+    const emailIds = new Set(
+      store.node_emails.filter((ne) => ne.node_id === nodeId).map((ne) => ne.email_id)
+    );
+    return store.raw_emails
+      .filter((e) => emailIds.has(e.id))
+      .sort((a, b) => b.received_at - a.received_at) as unknown as RawEmail[];
+  });
 }
 
 export function getNodeForEmail(emailId: string): TopicNode | null {
-  return (
-    (getDb()
-      .prepare(
-        `SELECT n.* FROM nodes n JOIN node_emails ne ON ne.node_id = n.id WHERE ne.email_id = ? LIMIT 1`
-      )
-      .get(emailId) as TopicNode) ?? null
-  );
+  return query((store) => {
+    const link = store.node_emails.find((ne) => ne.email_id === emailId);
+    if (!link) return null;
+    return (store.nodes.find((n) => n.id === link.node_id) as unknown as TopicNode) ?? null;
+  });
 }
 
 export function clearNodesForUser(userId: string) {
-  const db = getDb();
-  db.prepare('DELETE FROM node_emails WHERE node_id IN (SELECT id FROM nodes WHERE user_id = ?)').run(userId);
-  db.prepare('DELETE FROM nodes WHERE user_id = ?').run(userId);
+  mutate((store) => {
+    const userNodeIds = new Set(
+      store.nodes.filter((n) => n.user_id === userId).map((n) => n.id)
+    );
+    store.node_emails = store.node_emails.filter((ne) => !userNodeIds.has(ne.node_id));
+    store.nodes = store.nodes.filter((n) => n.user_id !== userId);
+  });
 }
 
 // ---------- context entities ----------
 
 export function insertContextEntity(userId: string, entity: Omit<ContextEntity, 'id' | 'user_id' | 'created_at'>): string {
   const id = crypto.randomUUID();
-  getDb()
-    .prepare(
-      `INSERT INTO context_entities (id, user_id, entity_type, data, confidence, user_confirmed, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
+
+  mutate((store) => {
+    store.context_entities.push({
       id,
-      userId,
-      entity.entity_type,
-      JSON.stringify(entity.data),
-      entity.confidence,
-      entity.user_confirmed ? 1 : 0,
-      Date.now()
-    );
+      user_id: userId,
+      entity_type: entity.entity_type,
+      data: JSON.stringify(entity.data),
+      confidence: entity.confidence,
+      user_confirmed: entity.user_confirmed ? 1 : 0,
+      created_at: Date.now(),
+    });
+  });
+
   return id;
 }
 
 export function getContextEntities(userId: string): ContextEntity[] {
-  const rows = getDb().prepare('SELECT * FROM context_entities WHERE user_id = ?').all(userId) as any[];
-  return rows.map((r) => ({ ...r, data: JSON.parse(r.data), user_confirmed: !!r.user_confirmed }));
+  return query((store) => {
+    return store.context_entities
+      .filter((ce) => ce.user_id === userId)
+      .map((r) => ({
+        ...r,
+        entity_type: r.entity_type as EntityType,
+        data: JSON.parse(r.data),
+        user_confirmed: !!r.user_confirmed,
+      })) as ContextEntity[];
+  });
 }
 
 export function confirmContextEntity(id: string) {
-  getDb().prepare('UPDATE context_entities SET user_confirmed = 1 WHERE id = ?').run(id);
+  mutate((store) => {
+    const entity = store.context_entities.find((ce) => ce.id === id);
+    if (entity) {
+      entity.user_confirmed = 1;
+    }
+  });
 }
 
 // ---------- sync progress ----------
@@ -321,20 +529,36 @@ export function setSyncProgress(userId: string, progress: {
   processed?: number;
   classified?: number;
 }) {
-  const db = getDb();
-  const existing = db.prepare('SELECT user_id FROM sync_progress WHERE user_id = ?').get(userId);
   const now = Date.now();
-  if (existing) {
-    db.prepare(
-      `UPDATE sync_progress SET status = ?, total = COALESCE(?, total), processed = COALESCE(?, processed), classified = COALESCE(?, classified), updated_at = ? WHERE user_id = ?`
-    ).run(progress.status, progress.total ?? null, progress.processed ?? null, progress.classified ?? null, now, userId);
-  } else {
-    db.prepare(
-      `INSERT INTO sync_progress (user_id, status, total, processed, classified, started_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(userId, progress.status, progress.total ?? 0, progress.processed ?? 0, progress.classified ?? 0, now, now);
-  }
+
+  mutate((store) => {
+    const idx = store.sync_progress.findIndex((sp) => sp.user_id === userId);
+    if (idx >= 0) {
+      const existing = store.sync_progress[idx];
+      store.sync_progress[idx] = {
+        ...existing,
+        status: progress.status,
+        total: progress.total ?? existing.total,
+        processed: progress.processed ?? existing.processed,
+        classified: progress.classified ?? existing.classified,
+        updated_at: now,
+      };
+    } else {
+      store.sync_progress.push({
+        user_id: userId,
+        status: progress.status,
+        total: progress.total ?? 0,
+        processed: progress.processed ?? 0,
+        classified: progress.classified ?? 0,
+        started_at: now,
+        updated_at: now,
+      });
+    }
+  });
 }
 
 export function getSyncProgress(userId: string) {
-  return getDb().prepare('SELECT * FROM sync_progress WHERE user_id = ?').get(userId) as any;
+  return query((store) => {
+    return store.sync_progress.find((sp) => sp.user_id === userId) ?? null;
+  });
 }

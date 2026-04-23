@@ -31,11 +31,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 
-# sqlite
+# sqlite (legacy)
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
+
+# json file storage
+.data/
 
 # logs
 /logs

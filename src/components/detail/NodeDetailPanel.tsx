@@ -20,7 +20,7 @@ export function NodeDetailPanel({ nodeId, onClose, onNavigateToLedger }: NodeDet
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function fetch() {
+    async function loadData() {
       try {
         const [nodesRes, emailsRes] = await Promise.all([
           fetch('/api/nodes'),
@@ -40,7 +40,7 @@ export function NodeDetailPanel({ nodeId, onClose, onNavigateToLedger }: NodeDet
         setLoading(false);
       }
     }
-    fetch();
+    loadData();
   }, [nodeId]);
 
   if (loading) return null;

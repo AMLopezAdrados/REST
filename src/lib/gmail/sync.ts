@@ -37,7 +37,8 @@ export async function syncRecentEmails(
   let pageToken: string | undefined = undefined;
 
   do {
-    const res = await gmail.users.messages.list({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const res: any = await gmail.users.messages.list({
       userId: 'me',
       q: `newer_than:${days}d`,
       pageToken,
