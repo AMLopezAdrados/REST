@@ -37,6 +37,9 @@ yarn-error.log*
 *.db-wal
 *.db-shm
 
+# local json store
+/.data/
+
 # logs
 /logs
 *.log
