@@ -12,11 +12,14 @@ export default function OnboardingPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (status === 'authenticated' && step < 3) {
-      setStep(3);
-      startSync();
+    if (status === 'authenticated' && step < 4) {
+      // Temporary MVP bypass: OAuth works, but /api/sync still touches the
+      // SQLite storage layer and can crash in the local Crostini environment.
+      // Skip automatic sync so the user can enter the app and test the UI.
+      setSyncProgress({ status: 'done', total: 0, processed: 0 });
+      setStep(4);
     }
-  }, [status]);
+  }, [status, step]);
 
   useEffect(() => {
     if (step === 3 && syncProgress.status !== 'idle') {
