@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
-import { requireUserId } from '@/lib/auth/session';
+import { requireSession } from '@/lib/auth/session';
 import { getGmailForUser } from '@/lib/gmail/client';
-import { getEmailById, getEmailsForNode } from '@/lib/storage/queries';
+import { upsertUser, getEmailById, getEmailsForNode } from '@/lib/storage/queries';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,14 +16,14 @@ interface ReplyRequest {
 }
 
 export async function POST(req: Request) {
-  const userId = await requireUserId();
+  const userId = (await requireSession())?.userId;
   if (!userId) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const body: ReplyRequest = await req.json();
   const { nodeId, emailId, intent, tone, template } = body;
 
-  let email;
-  let threadEmails = [];
+  let email: ReturnType<typeof getEmailById> = null;
+  let threadEmails: ReturnType<typeof getEmailsForNode> = [];
 
   if (emailId) {
     email = getEmailById(emailId);
@@ -76,8 +76,12 @@ export async function POST(req: Request) {
 }
 
 export async function PUT(req: Request) {
-  const userId = await requireUserId();
-  if (!userId) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const sess = await requireSession();
+  if (!sess) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const { userId } = sess;
+  if (sess.refreshToken) {
+    upsertUser({ id: userId, email: sess.email, refreshToken: sess.refreshToken, accessToken: sess.accessToken, tokenExpiry: sess.tokenExpiry });
+  }
 
   const { emailId, replyText } = await req.json();
   const email = getEmailById(emailId);

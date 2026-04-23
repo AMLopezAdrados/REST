@@ -34,6 +34,7 @@ export function decrypt(payload: string): string {
 // ---------- users ----------
 
 export function upsertUser(params: {
+  id?: string;
   email: string;
   refreshToken: string;
   accessToken?: string | null;
@@ -51,7 +52,7 @@ export function upsertUser(params: {
     return existing.id;
   }
 
-  const id = crypto.randomUUID();
+  const id = params.id ?? crypto.randomUUID();
   db.prepare(
     `INSERT INTO users (id, email, refresh_token, access_token, token_expiry, created_at) VALUES (?, ?, ?, ?, ?, ?)`
   ).run(id, params.email, encryptedRefresh, params.accessToken ?? null, params.tokenExpiry ?? null, now);

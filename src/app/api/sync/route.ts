@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
-import { requireUserId } from '@/lib/auth/session';
+import { requireSession } from '@/lib/auth/session';
 import { syncRecentEmails } from '@/lib/gmail/sync';
 import { classifyEmail } from '@/lib/classification/cascade';
 import { generateNodesForUser } from '@/lib/classification/nodes';
 import {
+  upsertUser,
   getUnclassifiedEmails,
   upsertClassification,
   setSyncProgress,
@@ -57,8 +58,14 @@ async function runClassification(userId: string) {
 }
 
 export async function POST(req: Request) {
-  const userId = await requireUserId();
-  if (!userId) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const sess = await requireSession();
+  if (!sess) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const { userId, email, refreshToken, accessToken, tokenExpiry } = sess;
+
+  // Ensure user exists in DB with latest tokens before any Gmail/DB operations.
+  if (refreshToken) {
+    upsertUser({ id: userId, email, refreshToken, accessToken, tokenExpiry });
+  }
 
   const url = new URL(req.url);
   const days = parseInt(url.searchParams.get('days') ?? '90', 10);
@@ -85,7 +92,7 @@ export async function POST(req: Request) {
 }
 
 export async function GET() {
-  const userId = await requireUserId();
+  const userId = (await requireSession())?.userId;
   if (!userId) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const progress = getSyncProgress(userId);
   return NextResponse.json(progress ?? { status: 'idle', total: 0, processed: 0 });

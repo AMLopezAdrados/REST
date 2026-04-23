@@ -1,27 +1,13 @@
 import NextAuth, { type AuthOptions } from 'next-auth';
 import GoogleProvider from 'next-auth/providers/google';
+import { createHash } from 'node:crypto';
 
-// Lazy-load storage so better-sqlite3 only loads when actually needed.
-// If the native binding fails, we want the error visible instead of a
-// silent process crash during module import.
-async function safeUpsertUser(params: Parameters<typeof import('@/lib/storage/queries').upsertUser>[0]) {
-  try {
-    const { upsertUser } = await import('@/lib/storage/queries');
-    return upsertUser(params);
-  } catch (err) {
-    console.error('[auth] storage import/upsert failed:', err);
-    return null;
-  }
-}
-
-async function safeGetUserByEmail(email: string) {
-  try {
-    const { getUserByEmail } = await import('@/lib/storage/queries');
-    return getUserByEmail(email);
-  } catch (err) {
-    console.error('[auth] storage import/get failed:', err);
-    return null;
-  }
+// Derive a stable, deterministic userId from the user's email.
+// This avoids any database access during the OAuth callback, which
+// prevents native-module (better-sqlite3) crashes from killing the process.
+function stableUserId(email: string): string {
+  const h = createHash('sha256').update(email).digest('hex');
+  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20,32)}`;
 }
 
 const GOOGLE_SCOPES = [
@@ -55,47 +41,22 @@ export const authOptions: AuthOptions = {
     async jwt({ token, account, profile }) {
       if (account && profile) {
         const email = (profile as any).email as string;
-        const refreshToken = account.refresh_token as string | undefined;
-        const accessToken = account.access_token as string | undefined;
-        const expiresAt = account.expires_at as number | undefined;
-
-        console.log('[auth] jwt callback:', {
-          email,
-          hasRefreshToken: !!refreshToken,
-          hasAccessToken: !!accessToken,
-          expiresAt,
-        });
-
-        if (refreshToken) {
-          const userId = await safeUpsertUser({
-            email,
-            refreshToken,
-            accessToken: accessToken ?? null,
-            tokenExpiry: expiresAt ? expiresAt * 1000 : null,
-          });
-          if (userId) token.userId = userId;
-          console.log('[auth] user upserted:', userId);
-        } else {
-          const existing = await safeGetUserByEmail(email);
-          if (existing) token.userId = existing.id;
-          console.log('[auth] no refresh token — using existing user:', existing?.id ?? 'none');
-        }
+        token.userId = stableUserId(email);
         token.email = email;
+        if (account.refresh_token) token.refreshToken = account.refresh_token;
+        if (account.access_token) token.accessToken = account.access_token;
+        if (account.expires_at) token.tokenExpiry = (account.expires_at as number) * 1000;
       }
       return token;
     },
     async session({ session, token }) {
-      if (token.userId) (session as any).userId = token.userId;
+      const s = session as any;
+      if (token.userId) s.userId = token.userId;
       if (token.email) session.user = { ...(session.user ?? {}), email: token.email as string };
+      if (token.refreshToken) s.refreshToken = token.refreshToken;
+      if (token.accessToken) s.accessToken = token.accessToken;
+      if (token.tokenExpiry) s.tokenExpiry = token.tokenExpiry;
       return session;
-    },
-  },
-  events: {
-    async signIn(message) {
-      console.log('[auth] signIn event:', message.user?.email);
-    },
-    async signOut() {
-      console.log('[auth] signOut event');
     },
   },
   debug: process.env.NODE_ENV === 'development',
