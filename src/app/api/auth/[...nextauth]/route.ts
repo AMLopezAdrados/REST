@@ -37,19 +37,33 @@ export const authOptions: AuthOptions = {
         const accessToken = account.access_token as string | undefined;
         const expiresAt = account.expires_at as number | undefined;
 
-        if (refreshToken) {
-          const userId = upsertUser({
-            email,
-            refreshToken,
-            accessToken: accessToken ?? null,
-            tokenExpiry: expiresAt ? expiresAt * 1000 : null,
-          });
-          token.userId = userId;
-        } else {
-          const existing = getUserByEmail(email);
-          if (existing) token.userId = existing.id;
+        console.log('[auth] jwt callback:', {
+          email,
+          hasRefreshToken: !!refreshToken,
+          hasAccessToken: !!accessToken,
+          expiresAt,
+        });
+
+        try {
+          if (refreshToken) {
+            const userId = upsertUser({
+              email,
+              refreshToken,
+              accessToken: accessToken ?? null,
+              tokenExpiry: expiresAt ? expiresAt * 1000 : null,
+            });
+            token.userId = userId;
+            console.log('[auth] user upserted:', userId);
+          } else {
+            const existing = getUserByEmail(email);
+            if (existing) token.userId = existing.id;
+            console.log('[auth] no refresh token — using existing user:', existing?.id ?? 'none');
+          }
+          token.email = email;
+        } catch (err) {
+          console.error('[auth] jwt callback failed:', err);
+          throw err;
         }
-        token.email = email;
       }
       return token;
     },
@@ -59,8 +73,18 @@ export const authOptions: AuthOptions = {
       return session;
     },
   },
+  events: {
+    async signIn(message) {
+      console.log('[auth] signIn event:', message.user?.email);
+    },
+    async signOut() {
+      console.log('[auth] signOut event');
+    },
+  },
+  debug: process.env.NODE_ENV === 'development',
   pages: {
     signIn: '/onboarding',
+    error: '/onboarding',
   },
 };
 
