@@ -1,6 +1,28 @@
 import NextAuth, { type AuthOptions } from 'next-auth';
 import GoogleProvider from 'next-auth/providers/google';
-import { upsertUser, getUserByEmail } from '@/lib/storage/queries';
+
+// Lazy-load storage so better-sqlite3 only loads when actually needed.
+// If the native binding fails, we want the error visible instead of a
+// silent process crash during module import.
+async function safeUpsertUser(params: Parameters<typeof import('@/lib/storage/queries').upsertUser>[0]) {
+  try {
+    const { upsertUser } = await import('@/lib/storage/queries');
+    return upsertUser(params);
+  } catch (err) {
+    console.error('[auth] storage import/upsert failed:', err);
+    return null;
+  }
+}
+
+async function safeGetUserByEmail(email: string) {
+  try {
+    const { getUserByEmail } = await import('@/lib/storage/queries');
+    return getUserByEmail(email);
+  } catch (err) {
+    console.error('[auth] storage import/get failed:', err);
+    return null;
+  }
+}
 
 const GOOGLE_SCOPES = [
   'openid',
@@ -44,26 +66,21 @@ export const authOptions: AuthOptions = {
           expiresAt,
         });
 
-        try {
-          if (refreshToken) {
-            const userId = upsertUser({
-              email,
-              refreshToken,
-              accessToken: accessToken ?? null,
-              tokenExpiry: expiresAt ? expiresAt * 1000 : null,
-            });
-            token.userId = userId;
-            console.log('[auth] user upserted:', userId);
-          } else {
-            const existing = getUserByEmail(email);
-            if (existing) token.userId = existing.id;
-            console.log('[auth] no refresh token — using existing user:', existing?.id ?? 'none');
-          }
-          token.email = email;
-        } catch (err) {
-          console.error('[auth] jwt callback failed:', err);
-          throw err;
+        if (refreshToken) {
+          const userId = await safeUpsertUser({
+            email,
+            refreshToken,
+            accessToken: accessToken ?? null,
+            tokenExpiry: expiresAt ? expiresAt * 1000 : null,
+          });
+          if (userId) token.userId = userId;
+          console.log('[auth] user upserted:', userId);
+        } else {
+          const existing = await safeGetUserByEmail(email);
+          if (existing) token.userId = existing.id;
+          console.log('[auth] no refresh token — using existing user:', existing?.id ?? 'none');
         }
+        token.email = email;
       }
       return token;
     },
