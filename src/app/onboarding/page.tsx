@@ -5,49 +5,15 @@ import { useRouter } from 'next/navigation';
 import { useSession, signIn } from 'next-auth/react';
 
 export default function OnboardingPage() {
-  const { status, data: session } = useSession();
+  const { status } = useSession();
   const router = useRouter();
   const [step, setStep] = useState(0);
-  const [syncProgress, setSyncProgress] = useState({ status: 'idle', total: 0, processed: 0 });
-  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (status === 'authenticated' && step < 3) {
-      setStep(3);
-      startSync();
+    if (status === 'authenticated') {
+      setStep(4);
     }
   }, [status]);
-
-  useEffect(() => {
-    if (step === 3 && syncProgress.status !== 'idle') {
-      const timer = setInterval(async () => {
-        const res = await fetch('/api/sync');
-        if (res.ok) {
-          const data = await res.json();
-          setSyncProgress(data);
-          if (data.status === 'done' || data.status === 'error') {
-            setStep(4);
-            clearInterval(timer);
-          }
-        }
-      }, 1000);
-      return () => clearInterval(timer);
-    }
-  }, [step, syncProgress.status]);
-
-  const startSync = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/sync', { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        setSyncProgress({ status: 'done', total: data.fetched, processed: data.fetched });
-        setStep(4);
-      }
-    } catch (err) {
-      console.error('Sync failed', err);
-    }
-  };
 
   return (
     <div className="w-full min-h-screen bg-gradient-to-br from-background to-lightBlue flex items-center justify-center p-6">
@@ -86,35 +52,12 @@ export default function OnboardingPage() {
           </div>
         )}
 
-        {step === 3 && (
-          <div className="text-center space-y-6">
-            <h2 className="text-sectionHeader font-bold text-navy">Syncing...</h2>
-            <div className="space-y-4">
-              <div>
-                <div className="w-full bg-border rounded-full h-2 overflow-hidden">
-                  <div
-                    className="bg-navy h-full transition-all"
-                    style={{
-                      width: `${Math.min(100, (syncProgress.processed / syncProgress.total) * 100 || 0)}%`,
-                    }}
-                  />
-                </div>
-                <p className="text-sm text-textMid mt-2">
-                  Processing {syncProgress.processed} of {syncProgress.total} emails
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
         {step === 4 && (
           <div className="text-center space-y-6">
             <h2 className="text-sectionHeader font-bold text-navy">Welcome</h2>
             <div className="bg-white rounded-card p-6 space-y-4">
               <p className="text-lg font-semibold text-textDark">Your inbox is quieter now.</p>
-              <p className="text-textMid">
-                {syncProgress.total} emails organized into topics. Ready to explore?
-              </p>
+              <p className="text-textMid">Ready to explore?</p>
             </div>
             <button
               onClick={() => router.push('/canvas')}
