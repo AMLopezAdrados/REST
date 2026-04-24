@@ -9,7 +9,7 @@ import {
 } from '@/lib/storage/queries';
 import { syncRecentEmails } from '@/lib/gmail/sync';
 import type { RawEmail } from '@/types/email';
-import type { TopicNode, Sector, NodeStatus } from '@/types/node';
+import type { TopicNode, Sector, NodeStatus, ActionType } from '@/types/node';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,16 +30,14 @@ function syntheticNodeId(userId: string, key: string) {
   return `fallback-${createHash('sha1').update(`${userId}|${key}`).digest('hex').slice(0, 24)}`;
 }
 
-function inferStatus(emails: RawEmail[]): NodeStatus {
-  const latest = emails[0];
-  const haystack = `${latest?.subject || ''} ${latest?.body_plaintext || ''}`.toLowerCase();
-  if (/(please|can you|could you|action|required|review|approve|confirm|deadline|asap|urgent|question\?)/.test(haystack)) {
-    return 'action';
-  }
-  if (/(receipt|invoice|order|booking|reservation|ticket|tracking)/.test(haystack)) {
-    return 'ongoing';
-  }
-  return 'saved';
+function extractFirstUrl(email: RawEmail): string | null {
+  const haystack = `${email.body_html || ''} ${(email.body_plaintext || '').slice(0, 2000)}`;
+  const match = haystack.match(/https?:\/\/[^\s"'<>]+/i);
+  return match?.[0] ?? null;
+}
+
+function sourceLabel(email: RawEmail) {
+  return email.from_name || email.from_email.split('@')[0] || email.from_email;
 }
 
 function inferSector(emails: RawEmail[]): Sector {
@@ -51,6 +49,133 @@ function inferSector(emails: RawEmail[]): Sector {
   if (/(mom|dad|family|friend|party|dinner|home)/.test(haystack)) return 'Personal';
   if (/(job|meeting|project|team|client|work)/.test(haystack)) return 'Work';
   return 'Other';
+}
+
+function inferAttention(emails: RawEmail[]) {
+  const latest = emails[0];
+  const subject = normalizeSubject(latest?.subject);
+  const haystack = `${latest?.subject || ''} ${latest?.body_plaintext || ''}`.toLowerCase();
+  const url = extractFirstUrl(latest);
+
+  const lowValue =
+    /(unsubscribe|newsletter|sponsored|discover more|people to follow|new followers|promo|promotion|sale|discount|deals|recommended for you|digest)/.test(haystack) ||
+    /(instagram|facebook|linkedin|tiktok|x\.com|twitter)/.test(latest?.from_email || '') ||
+    /(noreply|no-reply|mailer|notifications?@)/.test(latest?.from_email || '');
+
+  if (lowValue) {
+    return {
+      status: 'archive' as NodeStatus,
+      actionType: 'ignore' as ActionType,
+      why: 'Likely promotional or low-value update',
+      effort: 'Skip',
+      primaryLabel: 'Hide from focus',
+      primaryUrl: url,
+      lowValue: true,
+      trackingOnly: false,
+    };
+  }
+
+  if (/(pay now|payment due|invoice due|complete payment|secure your payment|billing issue)/.test(haystack)) {
+    return {
+      status: 'action' as NodeStatus,
+      actionType: 'pay' as ActionType,
+      why: 'Money or account access depends on this',
+      effort: '2 min',
+      primaryLabel: url ? 'Open payment page' : 'Review payment request',
+      primaryUrl: url,
+      lowValue: false,
+      trackingOnly: false,
+    };
+  }
+
+  if (/(upload|submit|complete form|fill out|verification|verify your|student id|document required)/.test(haystack)) {
+    return {
+      status: 'action' as NodeStatus,
+      actionType: 'upload' as ActionType,
+      why: 'A required step is still waiting on you',
+      effort: '3 min',
+      primaryLabel: url ? 'Open form' : 'Review requirements',
+      primaryUrl: url,
+      lowValue: false,
+      trackingOnly: false,
+    };
+  }
+
+  if (/(approve|review and approve|please review|needs review|sign in to review|confirm your review)/.test(haystack)) {
+    return {
+      status: 'action' as NodeStatus,
+      actionType: 'review' as ActionType,
+      why: 'Someone is waiting for your decision or review',
+      effort: '2 min',
+      primaryLabel: url ? 'Review now' : 'Open thread',
+      primaryUrl: url,
+      lowValue: false,
+      trackingOnly: false,
+    };
+  }
+
+  if (/(can you|could you|please reply|let me know|reply requested|question\?|need your answer|respond)/.test(haystack)) {
+    return {
+      status: 'action' as NodeStatus,
+      actionType: 'reply' as ActionType,
+      why: 'A human reply from you would unblock this',
+      effort: '30 sec',
+      primaryLabel: 'Draft reply',
+      primaryUrl: `mailto:${latest.from_email}?subject=${encodeURIComponent(`Re: ${subject || latest.subject || ''}`)}`,
+      lowValue: false,
+      trackingOnly: false,
+    };
+  }
+
+  if (/(choose a time|pick a time|schedule|calendar|availability|meeting)/.test(haystack)) {
+    return {
+      status: 'action' as NodeStatus,
+      actionType: 'schedule' as ActionType,
+      why: 'This needs a scheduling decision',
+      effort: '1 min',
+      primaryLabel: url ? 'Pick a time' : 'Draft reply',
+      primaryUrl: url ?? `mailto:${latest.from_email}?subject=${encodeURIComponent(`Re: ${subject || latest.subject || ''}`)}`,
+      lowValue: false,
+      trackingOnly: false,
+    };
+  }
+
+  if (/(confirm|rsvp|attendance|verify|accept invitation)/.test(haystack)) {
+    return {
+      status: 'action' as NodeStatus,
+      actionType: 'confirm' as ActionType,
+      why: 'A confirmation is still pending',
+      effort: '30 sec',
+      primaryLabel: url ? 'Confirm now' : 'Draft reply',
+      primaryUrl: url ?? `mailto:${latest.from_email}?subject=${encodeURIComponent(`Re: ${subject || latest.subject || ''}`)}`,
+      lowValue: false,
+      trackingOnly: false,
+    };
+  }
+
+  if (/(tracking|shipped|out for delivery|delivered|reservation confirmed|booking confirmed|receipt|ticket|order update)/.test(haystack)) {
+    return {
+      status: 'ongoing' as NodeStatus,
+      actionType: 'track' as ActionType,
+      why: 'Useful to monitor, but no action is needed right now',
+      effort: 'No action',
+      primaryLabel: url ? 'Open tracking' : 'Open details',
+      primaryUrl: url,
+      lowValue: false,
+      trackingOnly: true,
+    };
+  }
+
+  return {
+    status: 'saved' as NodeStatus,
+    actionType: 'read' as ActionType,
+    why: 'Worth keeping as reference, but not urgent',
+    effort: '1 min',
+    primaryLabel: url ? 'Open source' : 'Open thread',
+    primaryUrl: url,
+    lowValue: false,
+    trackingOnly: false,
+  };
 }
 
 function buildFallbackNodes(userId: string, emails: RawEmail[]): TopicNode[] {
@@ -72,6 +197,7 @@ function buildFallbackNodes(userId: string, emails: RawEmail[]): TopicNode[] {
     const jitter = 90 + (index % 5) * 18;
     const title = normalizeSubject(latest.subject) || latest.from_name || latest.from_email || 'Email thread';
     const summary = (latest.body_plaintext || '').replace(/\s+/g, ' ').trim().slice(0, 140) || 'Open to read this thread';
+    const attention = inferAttention(group);
 
     return {
       id: syntheticNodeId(userId, key),
@@ -82,8 +208,8 @@ function buildFallbackNodes(userId: string, emails: RawEmail[]): TopicNode[] {
       sector: inferSector(group),
       position_x: Math.cos(angle) * (radius + jitter),
       position_y: Math.sin(angle) * (radius + jitter * 0.7),
-      urgency_score: Math.max(0.15, 1 - index / Math.max(grouped.length, 1)),
-      status: inferStatus(group),
+      urgency_score: Math.max(0.12, 1 - index / Math.max(grouped.length, 1)),
+      status: attention.status,
       email_count: group.length,
       last_activity: latest.received_at,
       created_at: Date.now(),
@@ -91,6 +217,16 @@ function buildFallbackNodes(userId: string, emails: RawEmail[]): TopicNode[] {
       aggregate_summary: null,
       child_count: 0,
       parent_id: null,
+      source_label: sourceLabel(latest),
+      source_email: latest.from_email,
+      why_it_matters: attention.why,
+      action_type: attention.actionType,
+      effort_label: attention.effort,
+      primary_cta_label: attention.primaryLabel,
+      primary_cta_url: attention.primaryUrl,
+      secondary_cta_label: attention.status === 'action' ? 'Mark done' : 'Hide',
+      low_value: attention.lowValue,
+      is_tracking_only: attention.trackingOnly,
     };
   });
 }
