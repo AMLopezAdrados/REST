@@ -35,6 +35,16 @@ const DOMAIN_EMOJI: Record<string, string> = {
   Other: '✨',
 };
 
+function getPriorityHint(node: TopicNode, attentionState: 'active' | 'waiting' | 'snoozed' | 'done') {
+  if (attentionState === 'waiting') return 'Blocked';
+  if (attentionState === 'snoozed') return 'Later';
+  if (node.low_value) return 'Ignore';
+  if (node.status !== 'action') return node.is_tracking_only ? 'Monitor' : 'Low pressure';
+  if (node.effort_label === '30 sec' || node.effort_label === '1 min') return 'Quick win';
+  if ((node.urgency_score ?? 0) >= 0.7) return 'High impact';
+  return 'Worth doing';
+}
+
 export function NodeCard({
   node,
   attentionState = 'active',
@@ -48,6 +58,7 @@ export function NodeCard({
   const daysAgo = Math.max(0, Math.floor((Date.now() - node.last_activity) / (1000 * 60 * 60 * 24)));
   const emoji = useMemo(() => DOMAIN_EMOJI[node.sector] ?? '📄', [node.sector]);
   const actionLabel = node.action_type ? ACTION_LABELS[node.action_type] : null;
+  const priorityHint = getPriorityHint(node, attentionState);
 
   const stateLabel =
     attentionState === 'waiting'
@@ -102,6 +113,9 @@ export function NodeCard({
               {node.effort_label}
             </div>
           )}
+          <div className="inline-flex px-2 py-0.5 rounded-pill text-[10px] font-semibold uppercase tracking-wide bg-[#F5F0E8] border border-border/60 text-textMid">
+            {priorityHint}
+          </div>
         </div>
         <div className="text-[10px] font-semibold text-textLight shrink-0">{node.email_count} emails</div>
       </div>
