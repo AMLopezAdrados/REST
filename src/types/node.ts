@@ -17,4 +17,8 @@ export interface TopicNode {
   last_activity: number;
   created_at: number;
   participants?: string[];
+  depth?: number;
+  parent_id?: string | null;
+  aggregate_summary?: string | null;
+  child_count?: number;
 }
