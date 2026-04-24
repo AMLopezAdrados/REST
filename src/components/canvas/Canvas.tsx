@@ -35,6 +35,48 @@ const TABS: Array<{ key: FilterKey; label: string }> = [
   { key: 'archive', label: 'Ignore' },
 ];
 
+const EFFORT_SCORE: Record<string, number> = {
+  '30 sec': 1,
+  '1 min': 2,
+  '2 min': 3,
+  '3 min': 4,
+  'No action': 1,
+  Skip: 1,
+};
+
+function getPriorityScore(node: TopicNode, action?: PersistedNodeAction) {
+  if (action?.state === 'waiting') return 0.22;
+  if (action?.state === 'snoozed') return 0.08;
+  if (node.low_value) return 0.02;
+
+  const urgency = node.urgency_score ?? 0;
+  const effort = EFFORT_SCORE[node.effort_label || ''] ?? 3;
+  const actionBoost = node.status === 'action' ? 0.45 : 0.15;
+  const trackBoost = node.is_tracking_only ? 0.08 : 0;
+  const sourceBoost = node.source_email && !/noreply|no-reply|notifications?@|mailer/i.test(node.source_email) ? 0.08 : 0;
+  const lowValuePenalty = node.low_value ? 0.5 : 0;
+  const effortPenalty = Math.min(0.2, effort * 0.035);
+
+  return urgency + actionBoost + trackBoost + sourceBoost - effortPenalty - lowValuePenalty;
+}
+
+function matchesQuery(node: TopicNode, query: string) {
+  if (!query.trim()) return true;
+  const q = query.trim().toLowerCase();
+  return [
+    node.title,
+    node.summary,
+    node.source_label,
+    node.source_email,
+    node.why_it_matters,
+    node.action_type,
+    node.category,
+    node.sector,
+  ]
+    .filter(Boolean)
+    .some((value) => String(value).toLowerCase().includes(q));
+}
+
 export function Canvas({
   nodes,
   nodeActions = {},
@@ -50,47 +92,54 @@ export function Canvas({
   const [filter, setFilter] = useState<FilterKey>('all');
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [query, setQuery] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [lastPointer, setLastPointer] = useState({ x: 0, y: 0 });
 
-  const actionableNodes = useMemo(
-    () => nodes.filter((n) => n.status === 'action' && !n.low_value && !nodeActions[n.id]),
+  const searchableNodes = useMemo(
+    () => [...nodes].sort((a, b) => getPriorityScore(b, nodeActions[b.id]) - getPriorityScore(a, nodeActions[a.id])),
     [nodes, nodeActions],
+  );
+
+  const actionableNodes = useMemo(
+    () => searchableNodes.filter((n) => n.status === 'action' && !n.low_value && !nodeActions[n.id]),
+    [searchableNodes, nodeActions],
   );
   const waitingCount = useMemo(
-    () => nodes.filter((n) => nodeActions[n.id]?.state === 'waiting').length,
-    [nodes, nodeActions],
+    () => searchableNodes.filter((n) => nodeActions[n.id]?.state === 'waiting').length,
+    [searchableNodes, nodeActions],
   );
   const snoozedCount = useMemo(
-    () => nodes.filter((n) => nodeActions[n.id]?.state === 'snoozed').length,
-    [nodes, nodeActions],
+    () => searchableNodes.filter((n) => nodeActions[n.id]?.state === 'snoozed').length,
+    [searchableNodes, nodeActions],
   );
 
   const filtered = useMemo(() => {
-    if (filter === 'all') return nodes;
-    if (filter === 'action') return nodes.filter((n) => n.status === 'action' && !n.low_value && !nodeActions[n.id]);
+    const base = searchableNodes.filter((n) => matchesQuery(n, query));
+    if (filter === 'all') return base;
+    if (filter === 'action') return base.filter((n) => n.status === 'action' && !n.low_value && !nodeActions[n.id]);
     if (filter === 'ongoing') {
-      return nodes.filter(
+      return base.filter(
         (n) => nodeActions[n.id]?.state === 'waiting' || nodeActions[n.id]?.state === 'snoozed' || n.is_tracking_only || (n.status === 'ongoing' && !n.low_value),
       );
     }
-    if (filter === 'saved') return nodes.filter((n) => n.status === 'saved' && !n.low_value && !nodeActions[n.id]);
-    return nodes.filter((n) => n.low_value || n.status === 'archive');
-  }, [nodes, filter, nodeActions]);
+    if (filter === 'saved') return base.filter((n) => n.status === 'saved' && !n.low_value && !nodeActions[n.id]);
+    return base.filter((n) => n.low_value || n.status === 'archive');
+  }, [searchableNodes, filter, nodeActions, query]);
 
-  const focusedNode = useMemo(() => nodes.find((n) => n.id === focusedTopicId), [nodes, focusedTopicId]);
+  const focusedNode = useMemo(() => searchableNodes.find((n) => n.id === focusedTopicId), [searchableNodes, focusedTopicId]);
   const quickWins = useMemo(
     () => actionableNodes.filter((n) => ['30 sec', '1 min', '2 min'].includes(n.effort_label || '')),
     [actionableNodes],
   );
-  const safeToIgnore = useMemo(() => nodes.filter((n) => n.low_value || n.status === 'archive'), [nodes]);
-  const trackingCount = useMemo(() => nodes.filter((n) => n.is_tracking_only).length, [nodes]);
+  const safeToIgnore = useMemo(() => searchableNodes.filter((n) => n.low_value || n.status === 'archive'), [searchableNodes]);
+  const trackingCount = useMemo(() => searchableNodes.filter((n) => n.is_tracking_only).length, [searchableNodes]);
 
   const clusters = useMemo(() => {
     if (focusedTopicId) return [];
     const THRESHOLD = 350 / zoom;
     const result: { id: string; x: number; y: number; nodes: TopicNode[]; sector: string }[] = [];
-    const sorted = [...filtered].sort((a, b) => b.urgency_score - a.urgency_score);
+    const sorted = [...filtered].sort((a, b) => getPriorityScore(b, nodeActions[b.id]) - getPriorityScore(a, nodeActions[a.id]));
 
     sorted.forEach((node) => {
       const match = result.find(
@@ -112,7 +161,7 @@ export function Canvas({
       }
     });
     return result;
-  }, [filtered, zoom, focusedTopicId]);
+  }, [filtered, zoom, focusedTopicId, nodeActions]);
 
   const emailPositions = useMemo(() => {
     if (!focusedTopicId || emails.length === 0) return [];
@@ -160,6 +209,7 @@ export function Canvas({
     setPan({ x: 0, y: 0 });
     setZoom(1);
     setFilter('all');
+    setQuery('');
   };
 
   return (
@@ -219,6 +269,12 @@ export function Canvas({
             <span><span className="font-semibold text-textDark">{snoozedCount}</span> snoozed</span>
             <span className="opacity-30">•</span>
             <span><span className="font-semibold text-textDark">{safeToIgnore.length}</span> safe to ignore</span>
+            {query.trim() && (
+              <>
+                <span className="opacity-30">•</span>
+                <span><span className="font-semibold text-textDark">{filtered.length}</span> matching search</span>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -299,8 +355,23 @@ export function Canvas({
       {!focusedTopicId && (
         <div className="absolute bottom-6 left-0 right-0 flex justify-center pointer-events-none z-40 animate-fadeIn">
           <div className="relative w-full max-w-lg mx-6 pointer-events-auto">
-            <input type="text" placeholder="Search your world" className="w-full h-12 bg-cardBg border border-border mt-0 rounded-pill px-12 shadow-paper outline-none focus:ring-2 ring-coral/20 placeholder-textLight/60 text-textDark transition-all" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search your world"
+              className="w-full h-12 bg-cardBg border border-border mt-0 rounded-pill px-12 pr-10 shadow-paper outline-none focus:ring-2 ring-coral/20 placeholder-textLight/60 text-textDark transition-all"
+            />
             <svg className="absolute left-4 top-3.5 w-5 h-5 text-textLight opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery('')}
+                className="absolute right-3 top-3 text-textLight hover:text-textDark"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+            )}
           </div>
 
           <div className="absolute right-6 bottom-0 pointer-events-auto">
