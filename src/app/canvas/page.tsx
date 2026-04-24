@@ -1,22 +1,26 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import type { TopicNode } from '@/types/node';
 import { Canvas } from '@/components/canvas/Canvas';
-import { Header } from '@/components/shared/Header';
 import { NodeDetailPanel } from '@/components/detail/NodeDetailPanel';
 
 export default function CanvasPage() {
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const router = useRouter();
   const [nodes, setNodes] = useState<TopicNode[]>([]);
-  const [filter, setFilter] = useState<'all' | 'action' | 'ongoing' | 'saved' | 'archive'>('all');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [focusedTopicId, setFocusedTopicId] = useState<string | null>(null);
   const [focusedEmails, setFocusedEmails] = useState<any[]>([]);
+  const [dismissedNodeIds, setDismissedNodeIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const visibleNodes = useMemo(
+    () => nodes.filter((node) => !dismissedNodeIds.includes(node.id)),
+    [nodes, dismissedNodeIds],
+  );
 
   useEffect(() => {
     async function fetchEmails() {
@@ -27,7 +31,7 @@ export default function CanvasPage() {
       try {
         const res = await fetch('/api/nodes', {
           method: 'POST',
-          body: JSON.stringify({ nodeId: focusedTopicId })
+          body: JSON.stringify({ nodeId: focusedTopicId }),
         });
         if (res.ok) {
           const data = await res.json();
@@ -61,6 +65,12 @@ export default function CanvasPage() {
     if (status === 'authenticated') fetchNodes();
   }, [status]);
 
+  const handleMarkDone = (nodeId: string) => {
+    setDismissedNodeIds((prev) => (prev.includes(nodeId) ? prev : [...prev, nodeId]));
+    if (selectedNodeId === nodeId) setSelectedNodeId(null);
+    if (focusedTopicId === nodeId) setFocusedTopicId(null);
+  };
+
   if (status === 'loading' || loading) {
     return (
       <div className="w-full h-screen bg-background flex items-center justify-center">
@@ -73,26 +83,25 @@ export default function CanvasPage() {
 
   return (
     <div className="flex flex-col w-full h-screen bg-background relative overflow-hidden">
-      {/* Canvas */}
-      <Canvas 
-        nodes={nodes} 
+      <Canvas
+        nodes={visibleNodes}
         onNodeClick={setSelectedNodeId}
         focusedTopicId={focusedTopicId}
         onFocusedTopicChange={setFocusedTopicId}
         emails={focusedEmails}
+        onMarkDone={handleMarkDone}
       />
 
-      {/* Detail panel */}
       {selectedNodeId && (
         <div className="absolute right-0 top-0 bottom-0 z-50">
-           <NodeDetailPanel
-             nodeId={selectedNodeId}
-             onClose={() => setSelectedNodeId(null)}
-             onNavigateToLedger={() => {
-               setSelectedNodeId(null);
-               router.push(`/ledger?nodeId=${selectedNodeId}`);
-             }}
-           />
+          <NodeDetailPanel
+            nodeId={selectedNodeId}
+            onClose={() => setSelectedNodeId(null)}
+            onNavigateToLedger={() => {
+              setSelectedNodeId(null);
+              router.push(`/ledger?nodeId=${selectedNodeId}`);
+            }}
+          />
         </div>
       )}
     </div>
