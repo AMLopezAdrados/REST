@@ -2,6 +2,17 @@ export type NodeStatus = 'action' | 'ongoing' | 'saved' | 'archive';
 
 export type Sector = 'Work' | 'Personal' | 'Travel' | 'Orders' | 'Admin' | 'Other';
 
+export type ActionType =
+  | 'reply'
+  | 'review'
+  | 'pay'
+  | 'upload'
+  | 'schedule'
+  | 'confirm'
+  | 'track'
+  | 'read'
+  | 'ignore';
+
 export interface TopicNode {
   id: string;
   user_id: string;
@@ -21,4 +32,14 @@ export interface TopicNode {
   parent_id?: string | null;
   aggregate_summary?: string | null;
   child_count?: number;
+  source_label?: string | null;
+  source_email?: string | null;
+  why_it_matters?: string | null;
+  action_type?: ActionType | null;
+  effort_label?: string | null;
+  primary_cta_label?: string | null;
+  primary_cta_url?: string | null;
+  secondary_cta_label?: string | null;
+  low_value?: boolean;
+  is_tracking_only?: boolean;
 }
