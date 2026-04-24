@@ -13,6 +13,16 @@ export type ActionType =
   | 'read'
   | 'ignore';
 
+export type StreamType =
+  | 'human'
+  | 'promotion'
+  | 'transactional'
+  | 'security'
+  | 'social'
+  | 'support'
+  | 'system'
+  | 'service';
+
 export interface TopicNode {
   id: string;
   user_id: string;
@@ -42,4 +52,7 @@ export interface TopicNode {
   secondary_cta_label?: string | null;
   low_value?: boolean;
   is_tracking_only?: boolean;
+  service_key?: string | null;
+  stream_type?: StreamType | null;
+  bundle_kind?: 'service' | 'noise' | 'stream' | 'thread' | null;
 }
