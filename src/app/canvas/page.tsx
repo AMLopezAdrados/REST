@@ -7,6 +7,16 @@ import type { TopicNode } from '@/types/node';
 import { Canvas } from '@/components/canvas/Canvas';
 import { NodeDetailPanel } from '@/components/detail/NodeDetailPanel';
 
+type NodeActionState = 'active' | 'done' | 'waiting' | 'snoozed';
+
+interface PersistedNodeAction {
+  state: Exclude<NodeActionState, 'active'>;
+  snoozeUntil?: number;
+  updatedAt: number;
+}
+
+const STORAGE_KEY = 'rest-node-actions-v1';
+
 export default function CanvasPage() {
   const { status } = useSession();
   const router = useRouter();
@@ -14,12 +24,35 @@ export default function CanvasPage() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [focusedTopicId, setFocusedTopicId] = useState<string | null>(null);
   const [focusedEmails, setFocusedEmails] = useState<any[]>([]);
-  const [dismissedNodeIds, setDismissedNodeIds] = useState<string[]>([]);
+  const [nodeActions, setNodeActions] = useState<Record<string, PersistedNodeAction>>({});
   const [loading, setLoading] = useState(true);
 
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Record<string, PersistedNodeAction>;
+      const now = Date.now();
+      const cleaned = Object.fromEntries(
+        Object.entries(parsed).filter(([, value]) => !(value.state === 'snoozed' && (value.snoozeUntil || 0) <= now)),
+      );
+      setNodeActions(cleaned);
+    } catch (err) {
+      console.error('Failed to restore node action state', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nodeActions));
+    } catch (err) {
+      console.error('Failed to persist node action state', err);
+    }
+  }, [nodeActions]);
+
   const visibleNodes = useMemo(
-    () => nodes.filter((node) => !dismissedNodeIds.includes(node.id)),
-    [nodes, dismissedNodeIds],
+    () => nodes.filter((node) => nodeActions[node.id]?.state !== 'done'),
+    [nodes, nodeActions],
   );
 
   useEffect(() => {
@@ -65,10 +98,32 @@ export default function CanvasPage() {
     if (status === 'authenticated') fetchNodes();
   }, [status]);
 
+  const setNodeAction = (nodeId: string, action: PersistedNodeAction | null) => {
+    setNodeActions((prev) => {
+      const next = { ...prev };
+      if (action) next[nodeId] = action;
+      else delete next[nodeId];
+      return next;
+    });
+    if (selectedNodeId === nodeId && action?.state === 'done') setSelectedNodeId(null);
+    if (focusedTopicId === nodeId && action?.state === 'done') setFocusedTopicId(null);
+  };
+
   const handleMarkDone = (nodeId: string) => {
-    setDismissedNodeIds((prev) => (prev.includes(nodeId) ? prev : [...prev, nodeId]));
-    if (selectedNodeId === nodeId) setSelectedNodeId(null);
-    if (focusedTopicId === nodeId) setFocusedTopicId(null);
+    setNodeAction(nodeId, { state: 'done', updatedAt: Date.now() });
+  };
+
+  const handleMarkWaiting = (nodeId: string) => {
+    setNodeAction(nodeId, { state: 'waiting', updatedAt: Date.now() });
+  };
+
+  const handleSnooze = (nodeId: string) => {
+    const tomorrow = Date.now() + 24 * 60 * 60 * 1000;
+    setNodeAction(nodeId, { state: 'snoozed', snoozeUntil: tomorrow, updatedAt: Date.now() });
+  };
+
+  const handleReactivate = (nodeId: string) => {
+    setNodeAction(nodeId, null);
   };
 
   if (status === 'loading' || loading) {
@@ -85,11 +140,15 @@ export default function CanvasPage() {
     <div className="flex flex-col w-full h-screen bg-background relative overflow-hidden">
       <Canvas
         nodes={visibleNodes}
+        nodeActions={nodeActions}
         onNodeClick={setSelectedNodeId}
         focusedTopicId={focusedTopicId}
         onFocusedTopicChange={setFocusedTopicId}
         emails={focusedEmails}
         onMarkDone={handleMarkDone}
+        onMarkWaiting={handleMarkWaiting}
+        onSnooze={handleSnooze}
+        onReactivate={handleReactivate}
       />
 
       {selectedNodeId && (
