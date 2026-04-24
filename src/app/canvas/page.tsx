@@ -14,7 +14,31 @@ export default function CanvasPage() {
   const [nodes, setNodes] = useState<TopicNode[]>([]);
   const [filter, setFilter] = useState<'all' | 'action' | 'ongoing' | 'saved' | 'archive'>('all');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [focusedTopicId, setFocusedTopicId] = useState<string | null>(null);
+  const [focusedEmails, setFocusedEmails] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchEmails() {
+      if (!focusedTopicId) {
+        setFocusedEmails([]);
+        return;
+      }
+      try {
+        const res = await fetch('/api/nodes', {
+          method: 'POST',
+          body: JSON.stringify({ nodeId: focusedTopicId })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setFocusedEmails(data);
+        }
+      } catch (err) {
+        console.error('Failed to fetch emails', err);
+      }
+    }
+    fetchEmails();
+  }, [focusedTopicId]);
 
   useEffect(() => {
     if (status === 'unauthenticated') router.push('/onboarding');
@@ -50,7 +74,13 @@ export default function CanvasPage() {
   return (
     <div className="flex flex-col w-full h-screen bg-background relative overflow-hidden">
       {/* Canvas */}
-      <Canvas nodes={nodes} onNodeClick={setSelectedNodeId} />
+      <Canvas 
+        nodes={nodes} 
+        onNodeClick={setSelectedNodeId}
+        focusedTopicId={focusedTopicId}
+        onFocusedTopicChange={setFocusedTopicId}
+        emails={focusedEmails}
+      />
 
       {/* Detail panel */}
       {selectedNodeId && (
