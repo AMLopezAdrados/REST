@@ -6,13 +6,23 @@ import { SunCard } from './SunCard';
 import { ClusterCard } from './ClusterCard';
 import { EmailCard } from './EmailCard';
 
+interface PersistedNodeAction {
+  state: 'done' | 'waiting' | 'snoozed';
+  snoozeUntil?: number;
+  updatedAt: number;
+}
+
 interface CanvasProps {
   nodes: TopicNode[];
+  nodeActions?: Record<string, PersistedNodeAction>;
   onNodeClick: (nodeId: string) => void;
   focusedTopicId: string | null;
   onFocusedTopicChange: (id: string | null) => void;
   emails: RawEmail[];
   onMarkDone?: (nodeId: string) => void;
+  onMarkWaiting?: (nodeId: string) => void;
+  onSnooze?: (nodeId: string) => void;
+  onReactivate?: (nodeId: string) => void;
 }
 
 type FilterKey = 'all' | 'action' | 'ongoing' | 'saved' | 'archive';
@@ -25,25 +35,53 @@ const TABS: Array<{ key: FilterKey; label: string }> = [
   { key: 'archive', label: 'Ignore' },
 ];
 
-export function Canvas({ nodes, onNodeClick, focusedTopicId, onFocusedTopicChange, emails, onMarkDone }: CanvasProps) {
+export function Canvas({
+  nodes,
+  nodeActions = {},
+  onNodeClick,
+  focusedTopicId,
+  onFocusedTopicChange,
+  emails,
+  onMarkDone,
+  onMarkWaiting,
+  onSnooze,
+  onReactivate,
+}: CanvasProps) {
   const [filter, setFilter] = useState<FilterKey>('all');
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [lastPointer, setLastPointer] = useState({ x: 0, y: 0 });
 
+  const actionableNodes = useMemo(
+    () => nodes.filter((n) => n.status === 'action' && !n.low_value && !nodeActions[n.id]),
+    [nodes, nodeActions],
+  );
+  const waitingCount = useMemo(
+    () => nodes.filter((n) => nodeActions[n.id]?.state === 'waiting').length,
+    [nodes, nodeActions],
+  );
+  const snoozedCount = useMemo(
+    () => nodes.filter((n) => nodeActions[n.id]?.state === 'snoozed').length,
+    [nodes, nodeActions],
+  );
+
   const filtered = useMemo(() => {
     if (filter === 'all') return nodes;
-    if (filter === 'action') return nodes.filter((n) => n.status === 'action' && !n.low_value);
-    if (filter === 'ongoing') return nodes.filter((n) => n.is_tracking_only || (n.status === 'ongoing' && !n.low_value));
-    if (filter === 'saved') return nodes.filter((n) => n.status === 'saved' && !n.low_value);
+    if (filter === 'action') return nodes.filter((n) => n.status === 'action' && !n.low_value && !nodeActions[n.id]);
+    if (filter === 'ongoing') {
+      return nodes.filter(
+        (n) => nodeActions[n.id]?.state === 'waiting' || nodeActions[n.id]?.state === 'snoozed' || n.is_tracking_only || (n.status === 'ongoing' && !n.low_value),
+      );
+    }
+    if (filter === 'saved') return nodes.filter((n) => n.status === 'saved' && !n.low_value && !nodeActions[n.id]);
     return nodes.filter((n) => n.low_value || n.status === 'archive');
-  }, [nodes, filter]);
+  }, [nodes, filter, nodeActions]);
 
   const focusedNode = useMemo(() => nodes.find((n) => n.id === focusedTopicId), [nodes, focusedTopicId]);
   const quickWins = useMemo(
-    () => nodes.filter((n) => n.status === 'action' && !n.low_value && ['30 sec', '1 min', '2 min'].includes(n.effort_label || '')),
-    [nodes],
+    () => actionableNodes.filter((n) => ['30 sec', '1 min', '2 min'].includes(n.effort_label || '')),
+    [actionableNodes],
   );
   const safeToIgnore = useMemo(() => nodes.filter((n) => n.low_value || n.status === 'archive'), [nodes]);
   const trackingCount = useMemo(() => nodes.filter((n) => n.is_tracking_only).length, [nodes]);
@@ -176,6 +214,10 @@ export function Canvas({ nodes, onNodeClick, focusedTopicId, onFocusedTopicChang
             <span className="opacity-30">•</span>
             <span><span className="font-semibold text-textDark">{trackingCount}</span> things to track</span>
             <span className="opacity-30">•</span>
+            <span><span className="font-semibold text-textDark">{waitingCount}</span> waiting on others</span>
+            <span className="opacity-30">•</span>
+            <span><span className="font-semibold text-textDark">{snoozedCount}</span> snoozed</span>
+            <span className="opacity-30">•</span>
             <span><span className="font-semibold text-textDark">{safeToIgnore.length}</span> safe to ignore</span>
           </div>
         </div>
@@ -209,7 +251,15 @@ export function Canvas({ nodes, onNodeClick, focusedTopicId, onFocusedTopicChang
                   onPointerDown={(e) => e.stopPropagation()}
                 >
                   {cluster.nodes.length === 1 ? (
-                    <NodeCard node={cluster.nodes[0]} onClick={() => onFocusedTopicChange(cluster.nodes[0].id)} onMarkDone={onMarkDone ? () => onMarkDone(cluster.nodes[0].id) : undefined} />
+                    <NodeCard
+                      node={cluster.nodes[0]}
+                      attentionState={nodeActions[cluster.nodes[0].id]?.state ?? 'active'}
+                      onClick={() => onFocusedTopicChange(cluster.nodes[0].id)}
+                      onMarkDone={onMarkDone ? () => onMarkDone(cluster.nodes[0].id) : undefined}
+                      onMarkWaiting={onMarkWaiting ? () => onMarkWaiting(cluster.nodes[0].id) : undefined}
+                      onSnooze={onSnooze ? () => onSnooze(cluster.nodes[0].id) : undefined}
+                      onReactivate={onReactivate ? () => onReactivate(cluster.nodes[0].id) : undefined}
+                    />
                   ) : (
                     <ClusterCard nodes={cluster.nodes} onClick={() => { setPan({ x: -cluster.x, y: -cluster.y }); setZoom((z) => Math.min(3, Math.max(z * 1.5, 1.3))); }} />
                   )}
@@ -222,7 +272,15 @@ export function Canvas({ nodes, onNodeClick, focusedTopicId, onFocusedTopicChang
         {focusedTopicId && focusedNode && (
           <div className="absolute left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2">
             <div className="absolute z-30 transition-all duration-700 animate-fadeIn" style={{ left: 0, top: 0, transform: 'translate(-50%, -50%) scale(1.15)' }}>
-              <NodeCard node={focusedNode} onClick={() => {}} onMarkDone={onMarkDone ? () => onMarkDone(focusedNode.id) : undefined} />
+              <NodeCard
+                node={focusedNode}
+                attentionState={nodeActions[focusedNode.id]?.state ?? 'active'}
+                onClick={() => {}}
+                onMarkDone={onMarkDone ? () => onMarkDone(focusedNode.id) : undefined}
+                onMarkWaiting={onMarkWaiting ? () => onMarkWaiting(focusedNode.id) : undefined}
+                onSnooze={onSnooze ? () => onSnooze(focusedNode.id) : undefined}
+                onReactivate={onReactivate ? () => onReactivate(focusedNode.id) : undefined}
+              />
             </div>
 
             {emailPositions.map((pos, i) => (
