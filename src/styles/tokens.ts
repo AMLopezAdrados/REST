@@ -1,19 +1,19 @@
 export const colors = {
   background: '#F5F0E8',
   cardBg: '#FFFFFF',
-  navy: '#1A3A5C',
-  blue: '#2E7DD1',
-  coral: '#E8604C',
-  amber: '#F0A050',
-  green: '#4CAF82',
-  lightBlue: '#EBF3FB',
+  coral: '#E8604C',     // action
+  amber: '#F0A050',     // ongoing
+  green: '#4CAF82',     // saved/done
+  blue: '#4A90D9',      // info/travel/archive
   lightCoral: '#FDF0EE',
-  lightGreen: '#EDF7F1',
   lightAmber: '#FEF6EC',
-  textDark: '#1A1A1A',
-  textMid: '#444444',
-  textLight: '#888888',
-  border: '#DDDDDD',
+  lightGreen: '#EDF7F1',
+  lightBlue: '#EBF3FB',
+  textDark: '#1C1917',  // warm dark ink (stone-900)
+  textMid: '#57534E',   // warm mid gray (stone-600)
+  textLight: '#78716C', // warm light gray (stone-500)
+  border: '#E7E5E4',    // light stroke
+  pencil: '#D6D3D1',    // for the lines between nodes
 } as const;
 
 export const statusColors: Record<string, { stripe: string; tint: string; pill: string; pillText: string }> = {
@@ -27,7 +27,7 @@ export const statusColors: Record<string, { stripe: string; tint: string; pill: 
     stripe: colors.amber,
     tint: colors.lightAmber,
     pill: colors.lightAmber,
-    pillText: '#B57020',
+    pillText: '#C07525',
   },
   saved: {
     stripe: colors.green,
@@ -42,3 +42,4 @@ export const statusColors: Record<string, { stripe: string; tint: string; pill: 
     pillText: colors.blue,
   },
 };
+

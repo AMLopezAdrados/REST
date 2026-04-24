@@ -48,45 +48,22 @@ export default function CanvasPage() {
   }
 
   return (
-    <div className="flex flex-col w-full h-screen bg-background">
-      <Header title="REST" />
-
-      {/* Filter tabs */}
-      <div className="flex gap-2 px-6 py-3 bg-white border-b border-border overflow-x-auto">
-        {(['all', 'action', 'ongoing', 'saved', 'archive'] as const).map((f) => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors whitespace-nowrap ${
-              filter === f
-                ? 'bg-navy text-white'
-                : 'bg-border text-textMid hover:bg-gray-300'
-            }`}
-          >
-            {f === 'all' && 'All'}
-            {f === 'action' && 'Action'}
-            {f === 'ongoing' && 'Ongoing'}
-            {f === 'saved' && 'Saved'}
-            {f === 'archive' && 'Archive'}
-          </button>
-        ))}
-      </div>
-
+    <div className="flex flex-col w-full h-screen bg-background relative overflow-hidden">
       {/* Canvas */}
-      <div className="flex-1 relative">
-        <Canvas nodes={nodes} onNodeClick={setSelectedNodeId} filter={filter} />
-      </div>
+      <Canvas nodes={nodes} onNodeClick={setSelectedNodeId} />
 
       {/* Detail panel */}
       {selectedNodeId && (
-        <NodeDetailPanel
-          nodeId={selectedNodeId}
-          onClose={() => setSelectedNodeId(null)}
-          onNavigateToLedger={() => {
-            setSelectedNodeId(null);
-            router.push(`/ledger?nodeId=${selectedNodeId}`);
-          }}
-        />
+        <div className="absolute right-0 top-0 bottom-0 z-50">
+           <NodeDetailPanel
+             nodeId={selectedNodeId}
+             onClose={() => setSelectedNodeId(null)}
+             onNavigateToLedger={() => {
+               setSelectedNodeId(null);
+               router.push(`/ledger?nodeId=${selectedNodeId}`);
+             }}
+           />
+        </div>
       )}
     </div>
   );

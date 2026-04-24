@@ -16,8 +16,8 @@ export interface LayoutPosition {
   score: number;
 }
 
-const CANVAS_RADIUS = 700;
-const MIN_RADIUS = 140;
+const MAX_RADIUS = 2500;
+const MIN_RADIUS = 350; // Keep space for the SunCard
 
 export function computeScore(input: { urgency: number; recency_days: number; last_activity_days: number }): number {
   const recency = Math.max(0, 1 - input.recency_days / 90);
@@ -53,13 +53,12 @@ export function layoutNodes(inputs: LayoutInput[]): LayoutPosition[] {
 
     nodes.forEach((n, i) => {
       const score = computeScore(n);
-      const radius = MIN_RADIUS + (1 - score) * (CANVAS_RADIUS - MIN_RADIUS);
+      // Exponential falloff for radius (score 1.0 = MIN_RADIUS, score 0.0 = MAX_RADIUS)
+      const radius = MIN_RADIUS + Math.pow(1 - score, 1.5) * (MAX_RADIUS - MIN_RADIUS);
 
-      // Spread within sector, with jitter for organic feel
+      // Spread within sector rigidly
       const t = count === 1 ? 0.5 : (i + 0.5) / count;
-      const baseAngle = start + t * span;
-      const jitter = ((i * 37) % 17) - 8;
-      const angle = baseAngle + jitter * 0.3;
+      const angle = start + t * span;
 
       const rad = toRadians(angle);
       const x = Math.cos(rad) * radius;
@@ -68,6 +67,9 @@ export function layoutNodes(inputs: LayoutInput[]): LayoutPosition[] {
     });
   }
 
+  // Phase 2 (Relaxation) is removed. The Canvas handles agglomerative clustering
+  // to dynamically prevent overlap at different zoom levels.
+  
   return positions;
 }
 

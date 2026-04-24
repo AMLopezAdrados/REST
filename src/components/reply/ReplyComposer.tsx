@@ -62,11 +62,11 @@ export function ReplyComposer({ email, nodeId, onClose }: ReplyComposerProps) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-card max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-lg">
+    <div className="fixed inset-0 bg-textDark/10 z-50 flex items-center justify-center p-4">
+      <div className="bg-cardBg rounded-card border border-border max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-paper transform translate-y-4">
         {/* Header */}
-        <div className="sticky top-0 bg-white border-b border-border p-6 flex items-center justify-between">
-          <h2 className="text-cardTitle font-semibold">Draft reply</h2>
+        <div className="sticky top-0 bg-cardBg p-6 flex items-center justify-between z-10">
+          <h2 className="text-sectionHeader font-semibold text-textDark">Draft reply</h2>
           <button onClick={onClose} className="text-textLight hover:text-textDark transition-colors">
             <X size={24} />
           </button>
@@ -83,10 +83,10 @@ export function ReplyComposer({ email, nodeId, onClose }: ReplyComposerProps) {
                     <button
                       key={t}
                       onClick={() => setTone(t)}
-                      className={`px-3 py-2 rounded-card text-sm font-medium transition-colors ${
+                      className={`px-3 py-2.5 rounded-card text-sm font-medium transition-colors border ${
                         tone === t
-                          ? 'bg-navy text-white'
-                          : 'bg-border text-textMid hover:bg-gray-300'
+                          ? 'bg-textDark text-white border-textDark'
+                          : 'bg-background text-textMid border-border hover:border-textLight'
                       }`}
                     >
                       {t}
@@ -105,10 +105,10 @@ export function ReplyComposer({ email, nodeId, onClose }: ReplyComposerProps) {
                       generateReply('yes_no');
                     }}
                     disabled={generating}
-                    className="w-full p-4 border-2 border-border rounded-card hover:border-navy hover:bg-lightBlue transition-colors text-left"
+                    className="w-full p-4 border border-border bg-background rounded-card hover:border-textDark/40 transition-colors text-left"
                   >
                     <p className="font-semibold text-textDark">Yes / No</p>
-                    <p className="text-sm text-textLight">Quick RSVP-style response</p>
+                    <p className="text-sm text-textLight mt-1">Quick RSVP-style response</p>
                   </button>
                   <button
                     onClick={() => {
@@ -116,26 +116,26 @@ export function ReplyComposer({ email, nodeId, onClose }: ReplyComposerProps) {
                       generateReply('suggest_time');
                     }}
                     disabled={generating}
-                    className="w-full p-4 border-2 border-border rounded-card hover:border-navy hover:bg-lightBlue transition-colors text-left"
+                    className="w-full p-4 border border-border bg-background rounded-card hover:border-textDark/40 transition-colors text-left mt-2"
                   >
                     <p className="font-semibold text-textDark">Suggest time</p>
-                    <p className="text-sm text-textLight">Propose a meeting time</p>
+                    <p className="text-sm text-textLight mt-1">Propose a meeting time</p>
                   </button>
-                  <div className="border-t border-border pt-2">
-                    <p className="text-sm text-textLight font-medium mb-2">Or write yourself</p>
+                  <div className="pt-4 mt-2">
+                    <p className="text-xs text-textLight font-medium mb-2 uppercase tracking-wide">Or write yourself</p>
                     <input
                       type="text"
                       placeholder="What do you want to say?"
                       value={intent}
                       onChange={(e) => setIntent(e.target.value)}
-                      className="w-full px-3 py-2 border border-border rounded-card text-sm focus:outline-none focus:ring-2 focus:ring-navy"
+                      className="w-full px-4 py-3 bg-background border border-border rounded-card text-sm focus:outline-none focus:ring-2 focus:ring-coral/20 placeholder-textLight/60 text-textDark"
                     />
                     <button
                       onClick={() => generateReply('custom')}
                       disabled={!intent || generating}
-                      className="w-full mt-2 px-4 py-2 bg-navy text-white rounded-card font-medium hover:opacity-90 transition-colors text-sm disabled:opacity-50"
+                      className="w-full mt-3 px-4 py-3 bg-textDark text-white rounded-card font-medium hover:-translate-y-0.5 transition-transform text-sm disabled:opacity-50 disabled:hover:translate-y-0"
                     >
-                      {generating ? 'Generating...' : 'Generate'}
+                      {generating ? 'Generating...' : 'Generate AI Reply'}
                     </button>
                   </div>
                 </div>
@@ -144,29 +144,29 @@ export function ReplyComposer({ email, nodeId, onClose }: ReplyComposerProps) {
           ) : (
             <>
               {/* Compose view */}
-              <div>
-                <p className="text-sm font-semibold text-textDark mb-2">Your reply</p>
+              <div className="animate-fadeIn">
+                <p className="text-sm font-semibold text-textDark mb-3">Your reply</p>
                 <textarea
                   value={reply}
                   onChange={(e) => setReply(e.target.value)}
-                  className="w-full p-3 border border-border rounded-card text-sm focus:outline-none focus:ring-2 focus:ring-navy"
+                  className="w-full p-4 bg-background border border-border rounded-card text-body focus:outline-none focus:ring-2 focus:ring-coral/20 text-textDark shadow-inner"
                   rows={6}
                 />
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-3 mt-6">
                 <button
                   onClick={() => setStep('templates')}
-                  className="flex-1 px-4 py-2 bg-border text-textDark rounded-card font-medium hover:bg-gray-300 transition-colors"
+                  className="flex-1 px-4 py-3 bg-background border border-border text-textDark rounded-card font-medium hover:bg-border/50 transition-colors text-sm"
                 >
                   Back
                 </button>
                 <button
                   onClick={sendReply}
                   disabled={sending}
-                  className="flex-1 px-4 py-2 bg-coral text-white rounded-card font-medium hover:opacity-90 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                  className="flex-[2] px-4 py-3 bg-blue text-white rounded-card font-medium hover:-translate-y-0.5 transition-transform flex items-center justify-center gap-2 disabled:opacity-50 disabled:hover:translate-y-0 shadow-paper text-sm"
                 >
                   <Send size={16} />
-                  {sending ? 'Sending...' : 'Send'}
+                  {sending ? 'Sending...' : 'Send securely'}
                 </button>
               </div>
             </>
