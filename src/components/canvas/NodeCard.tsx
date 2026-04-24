@@ -7,8 +7,20 @@ import { useMemo } from 'react';
 interface NodeCardProps {
   node: TopicNode;
   onClick: () => void;
-  variant?: 'conversation' | 'topic' | 'cluster' | 'domain';
+  onMarkDone?: () => void;
 }
+
+const ACTION_LABELS: Record<string, string> = {
+  reply: 'Reply',
+  review: 'Review',
+  pay: 'Pay',
+  upload: 'Upload',
+  schedule: 'Schedule',
+  confirm: 'Confirm',
+  track: 'Track',
+  read: 'Review',
+  ignore: 'Ignore',
+};
 
 const DOMAIN_EMOJI: Record<string, string> = {
   Work: '💼',
@@ -19,117 +31,113 @@ const DOMAIN_EMOJI: Record<string, string> = {
   Other: '✨',
 };
 
-export function NodeCard({ node, onClick, variant }: NodeCardProps) {
+export function NodeCard({ node, onClick, onMarkDone }: NodeCardProps) {
   const color = statusColors[node.status];
   const daysAgo = Math.max(0, Math.floor((Date.now() - node.last_activity) / (1000 * 60 * 60 * 24)));
-
-  const inferredVariant: NonNullable<NodeCardProps['variant']> =
-    variant ??
-    ((node.depth !== undefined && node.depth <= 3) || !!node.child_count || !!node.aggregate_summary
-      ? node.depth === 1
-        ? 'domain'
-        : node.depth === 2
-        ? 'cluster'
-        : 'topic'
-      : 'conversation');
-
-  const isAggregate = inferredVariant !== 'conversation';
-
-  const emojis = ['📄', '✈️', '📦', '🏠', '💳', '📅'];
-  const emoji = useMemo(
-    () =>
-      inferredVariant === 'domain'
-        ? DOMAIN_EMOJI[node.sector] ?? '🌍'
-        : emojis[Math.floor(node.id.length % emojis.length)],
-    [node.id, node.sector, inferredVariant],
-  );
-
-  const badgeLabel = isAggregate
-    ? inferredVariant === 'domain'
-      ? `${node.child_count ?? 0} clusters`
-      : inferredVariant === 'cluster'
-      ? `${node.child_count ?? 0} topics`
-      : `${node.child_count ?? 0} threads`
-    : node.status === 'action'
-    ? 'Action required'
-    : node.status === 'ongoing'
-    ? 'Ongoing'
-    : node.status === 'saved'
-    ? 'Saved'
-    : 'Archive';
-
-  const titleClass = isAggregate
-    ? 'text-[17px] font-serif font-semibold text-textDark mb-1 line-clamp-2 leading-tight'
-    : 'text-cardTitle text-textDark mb-1 line-clamp-2';
-
-  const summary = isAggregate ? node.aggregate_summary || node.summary : node.summary;
+  const emoji = useMemo(() => DOMAIN_EMOJI[node.sector] ?? '📄', [node.sector]);
+  const actionLabel = node.action_type ? ACTION_LABELS[node.action_type] : null;
 
   return (
-    <button
+    <div
       onClick={onClick}
-      className="w-full relative rounded-card bg-cardBg shadow-paper p-5 pl-6 text-left flex flex-col h-full border border-border/40 hover:shadow-md hover:-translate-y-0.5 transition-all"
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      className="w-full relative rounded-card bg-cardBg shadow-paper p-5 pl-6 text-left flex flex-col h-full border border-border/40 hover:shadow-md hover:-translate-y-0.5 transition-all cursor-pointer"
     >
       <div
         className="absolute top-0 bottom-0 left-0 w-1 rounded-l-card"
         style={{ backgroundColor: color.stripe }}
       />
 
-      <div className="flex justify-between items-start mb-2">
-        <div
-          className="inline-flex px-2 py-0.5 rounded-pill text-[10px] font-bold uppercase tracking-wide"
-          style={{ backgroundColor: color.pill, color: color.pillText }}
-        >
-          {badgeLabel}
-        </div>
-        {isAggregate && (
-          <div className="text-[10px] font-semibold text-textLight">
-            {node.email_count} emails
+      <div className="flex justify-between items-start gap-3 mb-2">
+        <div className="flex flex-wrap gap-2">
+          <div
+            className="inline-flex px-2 py-0.5 rounded-pill text-[10px] font-bold uppercase tracking-wide"
+            style={{ backgroundColor: color.pill, color: color.pillText }}
+          >
+            {node.low_value
+              ? 'Low value'
+              : node.status === 'action'
+              ? 'Do now'
+              : node.is_tracking_only
+              ? 'Track'
+              : node.status === 'saved'
+              ? 'Keep'
+              : 'Reference'}
           </div>
-        )}
+          {actionLabel && !node.low_value && (
+            <div className="inline-flex px-2 py-0.5 rounded-pill text-[10px] font-bold uppercase tracking-wide bg-stone-100 text-stone-700">
+              {actionLabel}
+            </div>
+          )}
+          {node.effort_label && (
+            <div className="inline-flex px-2 py-0.5 rounded-pill text-[10px] font-semibold uppercase tracking-wide bg-white border border-border/60 text-textLight">
+              {node.effort_label}
+            </div>
+          )}
+        </div>
+        <div className="text-[10px] font-semibold text-textLight shrink-0">{node.email_count} emails</div>
       </div>
 
       <div className="flex-1 mt-1">
-        <h3 className={titleClass}>
+        <h3 className="text-cardTitle text-textDark mb-1 line-clamp-2">
           {node.title} <span className="inline-block ml-1 opacity-80">{emoji}</span>
         </h3>
 
-        {!isAggregate && (
-          <div className="text-[13px] text-textLight font-medium mb-3 truncate">
-            {node.participants && node.participants.length > 0
-              ? node.participants.map((p) => p.split(' ')[0]).join(', ')
-              : node.category
-              ? node.category.charAt(0).toUpperCase() + node.category.slice(1)
-              : 'Email Thread'}
+        <div className="text-[13px] text-textLight font-medium mb-2 truncate">
+          {node.source_label || (node.participants && node.participants.length > 0
+            ? node.participants.map((p) => p.split(' ')[0]).join(', ')
+            : node.category
+            ? node.category.charAt(0).toUpperCase() + node.category.slice(1)
+            : 'Email Thread')}
+        </div>
+
+        <div className="text-[14px] text-textDark leading-snug line-clamp-2 mb-3">
+          {node.summary || 'Open to see context'}
+        </div>
+
+        {node.why_it_matters && (
+          <div className="text-[12px] text-textMid leading-snug mb-4 bg-stone-50 rounded-xl px-3 py-2 border border-border/40">
+            <span className="font-semibold text-textDark">Why:</span> {node.why_it_matters}
           </div>
         )}
+      </div>
 
-        <div className={`text-[14px] text-textDark leading-snug ${isAggregate ? 'line-clamp-2' : 'line-clamp-1'} mb-4`}>
-          {summary || 'Open to see context'}
+      <div className="flex items-center justify-between gap-3 mt-auto">
+        <div className="text-[11px] font-medium text-textLight flex items-center gap-1 flex-wrap">
+          <span>{daysAgo === 0 ? 'Today' : `${daysAgo}d ago`}</span>
+          <span className="opacity-40">·</span>
+          <span>{node.status === 'action' ? 'Worth doing now' : node.low_value ? 'Safe to ignore' : 'No rush'}</span>
+        </div>
+
+        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          {node.primary_cta_url && node.primary_cta_label && (
+            <a
+              href={node.primary_cta_url}
+              target={node.primary_cta_url.startsWith('http') ? '_blank' : undefined}
+              rel={node.primary_cta_url.startsWith('http') ? 'noreferrer' : undefined}
+              className="inline-flex items-center px-3 py-1.5 rounded-pill bg-[#1C1A2E] text-white text-[11px] font-semibold hover:opacity-90 transition-opacity"
+            >
+              {node.primary_cta_label}
+            </a>
+          )}
+          {onMarkDone && (
+            <button
+              type="button"
+              onClick={onMarkDone}
+              className="inline-flex items-center px-3 py-1.5 rounded-pill border border-border text-[11px] font-semibold text-textDark hover:bg-stone-50 transition-colors"
+            >
+              {node.low_value ? 'Hide' : 'Done'}
+            </button>
+          )}
         </div>
       </div>
-
-      <div className="flex items-center gap-3">
-        {!isAggregate && node.status === 'action' && (
-          <div className="flex items-center bg-coral text-white text-[11px] font-semibold px-2 py-0.5 rounded-md shadow-sm">
-            <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span>Due in 2 days</span>
-          </div>
-        )}
-
-        {(isAggregate || node.status !== 'action') && (
-          <div className="text-[11px] font-medium text-textLight flex items-center gap-1">
-            <span>{daysAgo === 0 ? 'Today' : `${daysAgo}d ago`}</span>
-            {isAggregate && (
-              <>
-                <span className="opacity-40">·</span>
-                <span>Open for context</span>
-              </>
-            )}
-          </div>
-        )}
-      </div>
-    </button>
+    </div>
   );
 }
