@@ -72,6 +72,11 @@ interface NodeRow {
   email_count: number;
   last_activity: number;
   created_at: number;
+  // Hierarchy (added)
+  depth?: number;
+  parent_id?: string | null;
+  aggregate_summary?: string;
+  child_count?: number;
 }
 
 interface NodeEmailRow {
@@ -392,6 +397,18 @@ export function getUnclassifiedEmails(userId: string, limit = 1000): RawEmail[] 
 
 // ---------- nodes ----------
 
+function rowToTopicNode(row: NodeRow): TopicNode {
+  return {
+    ...row,
+    sector: row.sector as TopicNode['sector'],
+    status: row.status as TopicNode['status'],
+    depth: (row.depth ?? 4) as TopicNode['depth'],
+    parent_id: row.parent_id ?? null,
+    aggregate_summary: row.aggregate_summary ?? '',
+    child_count: row.child_count ?? 0,
+  } as TopicNode;
+}
+
 export function upsertNode(n: Omit<TopicNode, 'created_at'> & { created_at?: number }): string {
   const now = Date.now();
 
@@ -411,6 +428,10 @@ export function upsertNode(n: Omit<TopicNode, 'created_at'> & { created_at?: num
       email_count: n.email_count,
       last_activity: n.last_activity,
       created_at: n.created_at ?? now,
+      depth: n.depth,
+      parent_id: n.parent_id,
+      aggregate_summary: n.aggregate_summary,
+      child_count: n.child_count,
     };
     if (idx >= 0) {
       // Preserve original created_at on update
@@ -428,13 +449,33 @@ export function getNodesForUser(userId: string): TopicNode[] {
   return query((store) => {
     return store.nodes
       .filter((n) => n.user_id === userId)
-      .sort((a, b) => b.urgency_score - a.urgency_score) as unknown as TopicNode[];
+      .sort((a, b) => b.urgency_score - a.urgency_score)
+      .map(rowToTopicNode);
   });
 }
 
 export function getNodeById(id: string): TopicNode | null {
   return query((store) => {
-    return (store.nodes.find((n) => n.id === id) as unknown as TopicNode) ?? null;
+    const row = store.nodes.find((n) => n.id === id);
+    return row ? rowToTopicNode(row) : null;
+  });
+}
+
+export function getNodesByDepth(userId: string, depth: number): TopicNode[] {
+  return query((store) => {
+    return store.nodes
+      .filter((n) => n.user_id === userId && (n.depth ?? 4) === depth)
+      .sort((a, b) => b.urgency_score - a.urgency_score)
+      .map(rowToTopicNode);
+  });
+}
+
+export function getNodesByParent(userId: string, parentId: string | null): TopicNode[] {
+  return query((store) => {
+    return store.nodes
+      .filter((n) => n.user_id === userId && (n.parent_id ?? null) === parentId)
+      .sort((a, b) => b.urgency_score - a.urgency_score)
+      .map(rowToTopicNode);
   });
 }
 

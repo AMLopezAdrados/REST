@@ -2,11 +2,13 @@ import Anthropic from '@anthropic-ai/sdk';
 import crypto from 'node:crypto';
 import type { RawEmail } from '@/types/email';
 import type { NodeStatus, Sector, TopicNode } from '@/types/node';
+import { ZOOM_LEVELS } from '@/types/node';
 import type { Classification } from '@/types/classification';
 import { getClassification, getEmailsForUser, upsertNode, linkEmailToNode, clearNodesForUser } from '@/lib/storage/queries';
 import { NODE_TITLE_SYSTEM, NODE_SUMMARY_SYSTEM } from './prompts';
 import { categoryToSector } from '@/lib/spatial/sectors';
 import { layoutNodes, nodeToLayoutInput } from '@/lib/spatial/layout';
+import { buildHierarchyAbove } from './hierarchy';
 
 const HAIKU_MODEL = 'claude-haiku-4-5';
 
@@ -208,6 +210,10 @@ export async function generateNodesForUser(userId: string): Promise<{ created: n
       email_count: group.emails.length,
       last_activity: last,
       created_at: Date.now(),
+      depth: ZOOM_LEVELS.CONVERSATION,
+      parent_id: null, // Set by buildHierarchyAbove
+      aggregate_summary: summary ?? '',
+      child_count: group.emails.length,
     };
     nodeDrafts.push({ group, node });
   }
@@ -227,6 +233,9 @@ export async function generateNodesForUser(userId: string): Promise<{ created: n
     }
   }
 
-  console.log(`[nodes] created ${nodeDrafts.length} nodes`);
+  console.log(`[nodes] created ${nodeDrafts.length} conversation nodes; building hierarchy above...`);
+  const hierarchyResult = await buildHierarchyAbove(userId, nodeDrafts.map(d => d.node), nodeDrafts.map(d => d.group.emails));
+  console.log(`[nodes] hierarchy: ${hierarchyResult.topics} topics, ${hierarchyResult.clusters} clusters, ${hierarchyResult.domains} domains`);
+
   return { created: nodeDrafts.length };
 }
