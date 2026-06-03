@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import Anthropic from '@anthropic-ai/sdk';
 import { requireSession } from '@/lib/auth/session';
 import { getGmailForUser } from '@/lib/gmail/client';
+import { createMessage } from '@/lib/anthropic/client';
 import { upsertUser, getEmailById, getEmailsForNode } from '@/lib/storage/queries';
 
 export const runtime = 'nodejs';
@@ -51,8 +51,7 @@ export async function POST(req: Request) {
     : `Generate a ${toneDesc} reply for this intent: "${intent}". Keep it 1-3 sentences.`;
 
   try {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const resp = await client.messages.create({
+    const resp = await createMessage({
       model: 'claude-sonnet-4-6',
       max_tokens: 300,
       messages: [

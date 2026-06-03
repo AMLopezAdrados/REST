@@ -1,37 +1,15 @@
-import Anthropic from '@anthropic-ai/sdk';
 import crypto from 'node:crypto';
+import type Anthropic from '@anthropic-ai/sdk';
 import type { RawEmail } from '@/types/email';
 import type { NodeStatus, Sector, TopicNode } from '@/types/node';
 import type { Classification } from '@/types/classification';
 import { getClassification, getEmailsForUser, upsertNode, linkEmailToNode, clearNodesForUser } from '@/lib/storage/queries';
+import { createMessage } from '@/lib/anthropic/client';
 import { NODE_TITLE_SYSTEM, NODE_SUMMARY_SYSTEM } from './prompts';
 import { categoryToSector } from '@/lib/spatial/sectors';
 import { layoutNodes, nodeToLayoutInput } from '@/lib/spatial/layout';
 
 const HAIKU_MODEL = 'claude-haiku-4-5';
-
-let cachedClient: Anthropic | null = null;
-function client(): Anthropic {
-  if (!cachedClient) {
-    if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not set');
-    cachedClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  }
-  return cachedClient;
-}
-
-// Rate limiter: max 1 request every 3 seconds = ~40/min (safe under 50/min limit)
-// With 4 concurrent workers × 2 calls per group, this throttles to safe levels.
-let lastCallTime = 0;
-async function rateLimitedCall<T>(fn: () => Promise<T>): Promise<T> {
-  const now = Date.now();
-  const elapsed = now - lastCallTime;
-  const minGap = 3000; // ms between calls
-  if (elapsed < minGap) {
-    await new Promise((r) => setTimeout(r, minGap - elapsed));
-  }
-  lastCallTime = Date.now();
-  return fn();
-}
 
 function extractText(resp: Anthropic.Message): string {
   const block = resp.content.find((b) => b.type === 'text');
@@ -104,22 +82,18 @@ Body: ${(e.body_plaintext || '').slice(0, 500)}`
 
   try {
     const [titleResp, summaryResp] = await Promise.all([
-      rateLimitedCall(() =>
-        client().messages.create({
-          model: HAIKU_MODEL,
-          max_tokens: 30,
-          system: NODE_TITLE_SYSTEM,
-          messages: [{ role: 'user', content: context }],
-        })
-      ),
-      rateLimitedCall(() =>
-        client().messages.create({
-          model: HAIKU_MODEL,
-          max_tokens: 120,
-          system: NODE_SUMMARY_SYSTEM,
-          messages: [{ role: 'user', content: context }],
-        })
-      ),
+      createMessage({
+        model: HAIKU_MODEL,
+        max_tokens: 30,
+        system: NODE_TITLE_SYSTEM,
+        messages: [{ role: 'user', content: context }],
+      }),
+      createMessage({
+        model: HAIKU_MODEL,
+        max_tokens: 120,
+        system: NODE_SUMMARY_SYSTEM,
+        messages: [{ role: 'user', content: context }],
+      }),
     ]);
 
     const t = extractText(titleResp).replace(/^["'\s]+|["'\s]+$/g, '');

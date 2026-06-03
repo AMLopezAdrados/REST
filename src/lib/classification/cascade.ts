@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { RawEmail } from '@/types/email';
 import type { Classification, MainCategory, IntentData } from '@/types/classification';
+import { createMessage } from '@/lib/anthropic/client';
 import { runLocalPatterns } from './local_patterns';
 import {
   MAIN_CATEGORY_SYSTEM,
@@ -13,26 +14,6 @@ import {
 const HAIKU_MODEL = 'claude-haiku-4-5';
 const SONNET_MODEL = 'claude-sonnet-4-6';
 const CLASSIFIER_VERSION = 'cascade-v1';
-
-let cachedClient: Anthropic | null = null;
-function client(): Anthropic {
-  if (!cachedClient) {
-    if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not set');
-    cachedClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  }
-  return cachedClient;
-}
-
-// Basic rate limiter — min interval between calls
-let nextAvailableAt = 0;
-const MIN_INTERVAL_MS = 120;
-async function throttle() {
-  const now = Date.now();
-  if (now < nextAvailableAt) {
-    await new Promise((r) => setTimeout(r, nextAvailableAt - now));
-  }
-  nextAvailableAt = Math.max(Date.now(), nextAvailableAt) + MIN_INTERVAL_MS;
-}
 
 function extractText(resp: Anthropic.Message): string {
   const block = resp.content.find((b) => b.type === 'text');
@@ -72,8 +53,7 @@ function logCost(step: string, usage: Anthropic.Usage, model: string) {
 }
 
 async function classifyMainCategory(email: RawEmail): Promise<MainCategory> {
-  await throttle();
-  const resp = await client().messages.create({
+  const resp = await createMessage({
     model: HAIKU_MODEL,
     max_tokens: 16,
     system: MAIN_CATEGORY_SYSTEM,
@@ -89,8 +69,7 @@ async function classifyMainCategory(email: RawEmail): Promise<MainCategory> {
 async function classifySubcategory(email: RawEmail, main: MainCategory): Promise<string | null> {
   const sub = SUB_PROMPTS[main];
   if (!sub) return null;
-  await throttle();
-  const resp = await client().messages.create({
+  const resp = await createMessage({
     model: HAIKU_MODEL,
     max_tokens: 16,
     system: sub.system,
@@ -104,8 +83,7 @@ async function classifySubcategory(email: RawEmail, main: MainCategory): Promise
 async function extractData(email: RawEmail, main: MainCategory): Promise<Record<string, unknown> | null> {
   const prompt = EXTRACTION_PROMPTS[main];
   if (!prompt) return null;
-  await throttle();
-  const resp = await client().messages.create({
+  const resp = await createMessage({
     model: main === 'work' ? HAIKU_MODEL : SONNET_MODEL,
     max_tokens: 400,
     system: prompt,
@@ -117,8 +95,7 @@ async function extractData(email: RawEmail, main: MainCategory): Promise<Record<
 }
 
 async function detectIntent(email: RawEmail): Promise<IntentData | null> {
-  await throttle();
-  const resp = await client().messages.create({
+  const resp = await createMessage({
     model: HAIKU_MODEL,
     max_tokens: 200,
     system: INTENT_SYSTEM,
