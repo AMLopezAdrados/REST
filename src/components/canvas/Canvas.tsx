@@ -37,9 +37,16 @@ function lodFor(scale: number): Lod {
   return 'full';
 }
 
-// Recency-biased radial layout in world coordinates: the more recently a topic
-// was active, the closer it sits to the centre. Topics are grouped into their
-// sector wedge so related subjects cluster together.
+// World-space "footprint" radius of a node — bigger bundles take more room and
+// are drawn larger, so a topic that bundles many emails has real presence.
+export function nodeFootprint(count: number): number {
+  return 150 + Math.min(130, Math.sqrt(Math.max(1, count)) * 16);
+}
+
+// Recency-biased radial layout, then a collision-relaxation pass so nodes never
+// stack: the more recently a topic was active, the closer to the centre; related
+// subjects share a sector wedge; bigger bundles claim more space. Action items
+// are pulled inward so what needs you sits near the middle.
 function useWorldLayout(nodes: TopicNode[]) {
   return useMemo(() => {
     const now = Date.now();
@@ -50,35 +57,72 @@ function useWorldLayout(nodes: TopicNode[]) {
       bySector.set(n.sector, arr);
     }
 
-    const pos = new Map<string, { x: number; y: number }>();
+    type P = { id: string; x: number; y: number; tx: number; ty: number; r: number };
+    const pts: P[] = [];
+
     for (const [sector, group] of bySector.entries()) {
       const arc = SECTOR_ANGLES[sector as keyof typeof SECTOR_ANGLES] ?? { start: 300, end: 360 };
       const start = arc.start + SECTOR_PAD;
       const span = arc.end - arc.start - SECTOR_PAD * 2;
 
-      // Most recent first → drawn nearer the centre.
       group.sort((a, b) => b.last_activity - a.last_activity);
       const count = group.length;
 
       group.forEach((n, i) => {
         const daysSince = Math.max(0, (now - n.last_activity) / (1000 * 60 * 60 * 24));
         const recency = clamp(1 - daysSince / 90, 0, 1);
-        const score = recency * 0.85 + clamp(n.urgency_score, 0, 1) * 0.15;
-        // Small deterministic radial jitter so equal-recency topics don't stack.
-        const jitterR = (((i * 53) % 31) - 15) * 1.5;
-        const radius = MIN_R + (1 - score) * (MAX_R - MIN_R) + jitterR;
-
+        const actionPull = n.status === 'action' ? 0.35 : 0;
+        const score = clamp(recency * 0.6 + clamp(n.urgency_score, 0, 1) * 0.2 + actionPull, 0, 1);
+        const radius = MIN_R + (1 - score) * (MAX_R - MIN_R);
         const t = count === 1 ? 0.5 : (i + 0.5) / count;
-        const jitterA = (((i * 37) % 17) - 8) * 0.35;
-        const angle = start + t * span + jitterA;
+        const angle = start + t * span;
         const rad = (angle * Math.PI) / 180;
-
-        pos.set(n.id, { x: Math.cos(rad) * radius, y: Math.sin(rad) * radius });
+        const x = Math.cos(rad) * radius;
+        const y = Math.sin(rad) * radius;
+        pts.push({ id: n.id, x, y, tx: x, ty: y, r: nodeFootprint(n.email_count) });
       });
     }
+
+    // Relaxation: push apart overlapping nodes, gently pull back toward target.
+    for (let iter = 0; iter < 90; iter++) {
+      for (let a = 0; a < pts.length; a++) {
+        for (let b = a + 1; b < pts.length; b++) {
+          const pa = pts[a];
+          const pb = pts[b];
+          let dx = pb.x - pa.x;
+          let dy = pb.y - pa.y;
+          let dist = Math.hypot(dx, dy) || 0.01;
+          const minDist = pa.r + pb.r;
+          if (dist < minDist) {
+            const push = (minDist - dist) / 2;
+            dx /= dist;
+            dy /= dist;
+            pa.x -= dx * push;
+            pa.y -= dy * push;
+            pb.x += dx * push;
+            pb.y += dy * push;
+          }
+        }
+      }
+      for (const p of pts) {
+        p.x += (p.tx - p.x) * 0.02;
+        p.y += (p.ty - p.y) * 0.02;
+      }
+    }
+
+    const pos = new Map<string, { x: number; y: number }>();
+    for (const p of pts) pos.set(p.id, { x: p.x, y: p.y });
     return pos;
   }, [nodes]);
 }
+
+const STATUS_OPACITY: Record<string, number> = {
+  action: 1,
+  ongoing: 0.96,
+  saved: 0.82,
+  archive: 0.55,
+};
+const STATUS_Z: Record<string, number> = { action: 30, ongoing: 20, saved: 12, archive: 6 };
 
 export function Canvas({ nodes, onNodeClick, filter = 'all' }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -239,11 +283,19 @@ export function Canvas({ nodes, onNodeClick, filter = 'all' }: CanvasProps) {
         const p = worldPos.get(node.id)!;
         const sx = view.x + p.x * view.scale;
         const sy = view.y + p.y * view.scale;
+        // When a filter is active everything shown is relevant → full opacity.
+        const opacity = filter === 'all' ? STATUS_OPACITY[node.status] ?? 0.9 : 1;
         return (
           <div
             key={node.id}
             className="absolute"
-            style={{ left: sx, top: sy, transform: 'translate(-50%, -50%)' }}
+            style={{
+              left: sx,
+              top: sy,
+              transform: 'translate(-50%, -50%)',
+              opacity,
+              zIndex: STATUS_Z[node.status] ?? 10,
+            }}
           >
             <NodeCard
               node={node}

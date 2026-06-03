@@ -68,10 +68,21 @@ export async function POST(req: Request) {
   }
 
   const url = new URL(req.url);
+  const mode = url.searchParams.get('mode');
   const days = parseInt(url.searchParams.get('days') ?? '90', 10);
   const max = parseInt(url.searchParams.get('max') ?? '300', 10);
 
   try {
+    // Re-bundle only: re-run node generation on already-synced & classified
+    // emails. Fast (no Gmail fetch, no re-classification) — used by the
+    // "Reorganize topics" action when bundling rules change.
+    if (mode === 'regen') {
+      console.log(`[sync] regenerating nodes for ${userId}`);
+      const nodes = await generateNodesForUser(userId);
+      setSyncProgress(userId, { status: 'done' });
+      return NextResponse.json({ ok: true, regenerated: true, nodes: nodes.created });
+    }
+
     console.log(`[sync] starting for ${userId} (days=${days}, max=${max})`);
     const fetchResult = await syncRecentEmails(userId, { days, max });
     const classified = await runClassification(userId);

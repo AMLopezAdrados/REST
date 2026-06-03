@@ -28,37 +28,68 @@ const STATUS_LABEL: Record<string, string> = {
   archive: 'Archive',
 };
 
+// Fake a stack of cards behind a pile node (promotions) so it reads as "many,
+// tucked away" rather than a single message.
+const PILE_SHADOW =
+  '0 1px 2px rgba(0,0,0,0.06), 5px 5px 0 -2px #fff, 6px 6px 0 -2px rgba(0,0,0,0.06), 10px 10px 0 -4px #fff, 11px 11px 0 -4px rgba(0,0,0,0.05)';
+
 export function NodeCard({ node, lod, selected, onClick, emails, onEnsureEmails }: NodeCardProps) {
   const color = statusColors[node.status] ?? statusColors.ongoing;
+  const count = node.email_count;
+  const pile = node.category === 'marketing';
+  const big = count >= 8;
 
-  // Lazily pull in this node's emails only when fully zoomed in.
   useEffect(() => {
     if (lod === 'full' && !emails && onEnsureEmails) onEnsureEmails(node.id);
   }, [lod, emails, onEnsureEmails, node.id]);
 
   const ring = selected ? 'ring-2 ring-navy' : '';
 
-  // -- LABEL: a tiny chip with just a dot + a few words --------------------
+  // -- LABEL: a chip with the topic in a few words -------------------------
   if (lod === 'label') {
+    if (pile) {
+      return (
+        <button
+          onClick={onClick}
+          className={`flex items-center gap-2 bg-white/80 backdrop-blur rounded-xl pl-3 pr-3 py-2 transition-soft ${ring}`}
+          style={{ boxShadow: PILE_SHADOW, maxWidth: 220 }}
+        >
+          <span className="text-sm font-medium text-textMid truncate">{node.title}</span>
+          <span className="shrink-0 text-[11px] font-semibold text-textLight bg-border/60 rounded-full px-2 py-0.5">
+            {count}
+          </span>
+        </button>
+      );
+    }
     return (
       <button
         onClick={onClick}
         className={`flex items-center gap-2 bg-white/90 backdrop-blur rounded-full pl-2 pr-3 py-1 shadow-card hover:shadow-cardHover transition-soft ${ring}`}
-        style={{ maxWidth: 200 }}
+        style={{ maxWidth: 180 }}
       >
-        <span className="shrink-0 w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color.stripe }} />
-        <span className="text-sm font-medium text-textDark truncate">{node.title}</span>
+        <span
+          className="shrink-0 rounded-full"
+          style={{ backgroundColor: color.stripe, width: big ? 12 : 9, height: big ? 12 : 9 }}
+        />
+        <span className={`font-medium text-textDark truncate ${big ? 'text-[15px]' : 'text-sm'}`}>
+          {node.title}
+        </span>
+        {count > 1 && <span className="shrink-0 text-[11px] text-textLight">· {count}</span>}
       </button>
     );
   }
 
-  // -- COMPACT: small card, pill + title -----------------------------------
+  // -- COMPACT -------------------------------------------------------------
   if (lod === 'compact') {
     return (
       <button
         onClick={onClick}
-        className={`bg-white rounded-card shadow-card hover:shadow-cardHover p-3 text-left transition-soft border-l-4 ${ring}`}
-        style={{ width: 190, borderColor: color.stripe }}
+        className={`bg-white rounded-card hover:shadow-cardHover p-3 text-left transition-soft border-l-4 ${ring}`}
+        style={{
+          width: big ? 220 : 190,
+          borderColor: color.stripe,
+          boxShadow: pile ? PILE_SHADOW : undefined,
+        }}
       >
         <div
           className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium mb-1.5"
@@ -66,9 +97,11 @@ export function NodeCard({ node, lod, selected, onClick, emails, onEnsureEmails 
         >
           {STATUS_LABEL[node.status]}
         </div>
-        <h3 className="font-semibold text-sm text-textDark line-clamp-2 leading-snug">{node.title}</h3>
+        <h3 className={`font-semibold text-textDark line-clamp-2 leading-snug ${big ? 'text-base' : 'text-sm'}`}>
+          {node.title}
+        </h3>
         <div className="mt-1.5 text-[11px] text-textLight">
-          {node.email_count} email{node.email_count !== 1 ? 's' : ''} · {daysAgoLabel(node.last_activity)}
+          {count} email{count !== 1 ? 's' : ''} · {daysAgoLabel(node.last_activity)}
         </div>
       </button>
     );
@@ -79,8 +112,12 @@ export function NodeCard({ node, lod, selected, onClick, emails, onEnsureEmails 
   return (
     <button
       onClick={onClick}
-      className={`bg-white rounded-card shadow-card hover:shadow-cardHover p-4 text-left transition-soft border-l-4 ${ring}`}
-      style={{ width: isFull ? 300 : 250, borderColor: color.stripe }}
+      className={`bg-white rounded-card hover:shadow-cardHover p-4 text-left transition-soft border-l-4 ${ring}`}
+      style={{
+        width: isFull ? 300 : big ? 270 : 250,
+        borderColor: color.stripe,
+        boxShadow: pile ? PILE_SHADOW : '0 2px 8px rgba(0,0,0,0.06)',
+      }}
     >
       <div className="flex items-center justify-between mb-2">
         <div
@@ -89,7 +126,6 @@ export function NodeCard({ node, lod, selected, onClick, emails, onEnsureEmails 
         >
           {STATUS_LABEL[node.status]}
         </div>
-        {/* Subcategory / sector — surfaces as you zoom in */}
         <span className="text-[11px] text-textLight">
           {node.sector}
           {node.category ? ` · ${node.category}` : ''}
@@ -121,7 +157,7 @@ export function NodeCard({ node, lod, selected, onClick, emails, onEnsureEmails 
 
       <div className="flex items-center justify-between text-xs text-textLight border-t border-border pt-2 mt-2">
         <span>
-          {node.email_count} email{node.email_count !== 1 ? 's' : ''}
+          {count} email{count !== 1 ? 's' : ''}
         </span>
         <span>{daysAgoLabel(node.last_activity)}</span>
       </div>

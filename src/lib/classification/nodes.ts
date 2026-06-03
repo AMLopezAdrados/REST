@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { RawEmail } from '@/types/email';
 import type { NodeStatus, Sector, TopicNode } from '@/types/node';
-import type { Classification } from '@/types/classification';
+import type { Classification, MainCategory } from '@/types/classification';
 import { getClassification, getEmailsForUser, upsertNode, linkEmailToNode, clearNodesForUser } from '@/lib/storage/queries';
 import { createMessage } from '@/lib/anthropic/client';
 import { NODE_TITLE_SYSTEM, NODE_SUMMARY_SYSTEM } from './prompts';
@@ -17,39 +17,115 @@ function extractText(resp: Anthropic.Message): string {
   return block.text.trim();
 }
 
+type GroupKind = 'conversation' | 'action' | 'brand' | 'sender' | 'promotions';
+
 interface EmailGroup {
   key: string;
+  kind: GroupKind;
+  label: string;
+  category: MainCategory;
   emails: RawEmail[];
   classifications: Classification[];
 }
 
-function normalizeSubject(subject: string | null): string {
-  if (!subject) return '';
-  return subject
-    .replace(/^(re|fwd|fw|aw|antw):\s*/gi, '')
-    .replace(/^(re|fwd|fw|aw|antw):\s*/gi, '')
-    .trim()
-    .toLowerCase();
+function senderDomain(email: RawEmail): string {
+  const at = (email.from_email.split('@')[1] || email.from_email).toLowerCase();
+  // Strip common bulk-mail subdomains so e.g. news.brand.com == mail.brand.com.
+  return at.replace(/^(mail|email|e|news|newsletter|info|no-?reply|reply|notifications?)\./, '');
 }
 
-function groupEmails(emails: RawEmail[]): EmailGroup[] {
-  const groups = new Map<string, EmailGroup>();
+function brandLabel(email: RawEmail): string {
+  const name = (email.from_name || '').trim();
+  if (name) {
+    const cleaned = name.split(/[<|·–-]/)[0].trim();
+    if (cleaned) return cleaned.slice(0, 40);
+  }
+  const d = senderDomain(email);
+  const parts = d.split('.');
+  const core = parts.length >= 2 ? parts[parts.length - 2] : d;
+  return core.charAt(0).toUpperCase() + core.slice(1);
+}
 
+function isActionable(cls: Classification): boolean {
+  const i = cls.intent_data;
+  return !!(i && (i.has_action || i.has_deadline || i.has_question));
+}
+
+// Aggressive ("maximale rust") bundling: collapse the inbox into a handful of
+// meaningful topics. Promotions become a single pile; orders/admin/travel are
+// bundled per brand; only real conversations and action items stay as their own
+// topics; stray work/personal mail is bundled per sender.
+function groupEmails(emails: RawEmail[]): EmailGroup[] {
+  // Pre-count thread sizes so we can tell a real conversation from a one-off.
+  const threadCount = new Map<string, number>();
+  for (const e of emails) {
+    if (e.thread_id) threadCount.set(e.thread_id, (threadCount.get(e.thread_id) ?? 0) + 1);
+  }
+
+  const groups = new Map<string, EmailGroup>();
   for (const e of emails) {
     const cls = getClassification(e.id);
     if (!cls) continue;
+    const cat = cls.main_category;
+    const domain = senderDomain(e);
 
-    const threadKey = e.thread_id && e.thread_id.length > 0 ? `t:${e.thread_id}` : null;
-    const fallbackKey = `s:${e.from_email.toLowerCase()}|${normalizeSubject(e.subject)}`;
-    const key = threadKey ?? fallbackKey;
+    let key: string;
+    let kind: GroupKind;
+    let label: string;
 
-    const g = groups.get(key) ?? { key, emails: [], classifications: [] };
+    if (cat === 'marketing') {
+      key = 'promotions';
+      kind = 'promotions';
+      label = 'Promoties';
+    } else if (isActionable(cls)) {
+      key = `act:${e.thread_id || e.id}`;
+      kind = 'action';
+      label = brandLabel(e);
+    } else if (cat === 'order' || cat === 'reservation' || cat === 'admin') {
+      key = `brand:${cat}:${domain}`;
+      kind = 'brand';
+      label = brandLabel(e);
+    } else if (e.thread_id && (threadCount.get(e.thread_id) ?? 0) > 1) {
+      key = `thr:${e.thread_id}`;
+      kind = 'conversation';
+      label = brandLabel(e);
+    } else {
+      key = `snd:${cat}:${domain}`;
+      kind = 'sender';
+      label = brandLabel(e);
+    }
+
+    const g = groups.get(key) ?? { key, kind, label, category: cat, emails: [], classifications: [] };
     g.emails.push(e);
     g.classifications.push(cls);
     groups.set(key, g);
   }
 
   return [...groups.values()];
+}
+
+const CATEGORY_NOUN: Partial<Record<MainCategory, [string, string]>> = {
+  order: ['bestelling', 'bestellingen'],
+  reservation: ['reservering', 'reserveringen'],
+  admin: ['administratief bericht', 'administratieve berichten'],
+};
+
+// Deterministic title/summary for bundles — no LLM call needed (faster, cheaper,
+// avoids rate limits). Returns null for kinds that should be summarized by the LLM.
+function bundleTitleSummary(g: EmailGroup): { title: string; summary: string } | null {
+  const n = g.emails.length;
+  if (g.kind === 'promotions') {
+    return { title: 'Promoties', summary: `${n} nieuwsbrieven en aanbiedingen — opzij gezet` };
+  }
+  if (g.kind === 'brand') {
+    const noun = CATEGORY_NOUN[g.category];
+    const word = noun ? (n === 1 ? noun[0] : noun[1]) : n === 1 ? 'bericht' : 'berichten';
+    return { title: g.label, summary: `${n} ${word}` };
+  }
+  if (g.kind === 'sender') {
+    return { title: g.label, summary: `${n} bericht${n === 1 ? '' : 'en'}` };
+  }
+  return null; // conversation / action → use the LLM summarizer
 }
 
 function fallbackTitle(group: EmailGroup): string {
@@ -109,6 +185,9 @@ Body: ${(e.body_plaintext || '').slice(0, 500)}`
 }
 
 function deriveStatus(group: EmailGroup): { status: NodeStatus; urgency: number } {
+  // The promotions pile is always tucked away and never urgent.
+  if (group.kind === 'promotions') return { status: 'archive', urgency: 0 };
+
   let hasAction = false;
   let hasDeadline = false;
   let hasQuestion = false;
@@ -172,8 +251,13 @@ export async function generateNodesForUser(userId: string): Promise<{ created: n
       const i = idx++;
       if (i >= groups.length) return;
       const g = groups[i];
-      const { title, summary } = await summarizeGroup(g);
-      results.push({ group: g, title, summary });
+      const deterministic = bundleTitleSummary(g);
+      if (deterministic) {
+        results.push({ group: g, ...deterministic });
+      } else {
+        const { title, summary } = await summarizeGroup(g);
+        results.push({ group: g, title, summary });
+      }
     }
   }
 
