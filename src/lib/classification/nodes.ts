@@ -19,6 +19,20 @@ function client(): Anthropic {
   return cachedClient;
 }
 
+// Rate limiter: max 1 request every 3 seconds = ~40/min (safe under 50/min limit)
+// With 4 concurrent workers × 2 calls per group, this throttles to safe levels.
+let lastCallTime = 0;
+async function rateLimitedCall<T>(fn: () => Promise<T>): Promise<T> {
+  const now = Date.now();
+  const elapsed = now - lastCallTime;
+  const minGap = 3000; // ms between calls
+  if (elapsed < minGap) {
+    await new Promise((r) => setTimeout(r, minGap - elapsed));
+  }
+  lastCallTime = Date.now();
+  return fn();
+}
+
 function extractText(resp: Anthropic.Message): string {
   const block = resp.content.find((b) => b.type === 'text');
   if (!block || block.type !== 'text') return '';
@@ -90,18 +104,22 @@ Body: ${(e.body_plaintext || '').slice(0, 500)}`
 
   try {
     const [titleResp, summaryResp] = await Promise.all([
-      client().messages.create({
-        model: HAIKU_MODEL,
-        max_tokens: 30,
-        system: NODE_TITLE_SYSTEM,
-        messages: [{ role: 'user', content: context }],
-      }),
-      client().messages.create({
-        model: HAIKU_MODEL,
-        max_tokens: 120,
-        system: NODE_SUMMARY_SYSTEM,
-        messages: [{ role: 'user', content: context }],
-      }),
+      rateLimitedCall(() =>
+        client().messages.create({
+          model: HAIKU_MODEL,
+          max_tokens: 30,
+          system: NODE_TITLE_SYSTEM,
+          messages: [{ role: 'user', content: context }],
+        })
+      ),
+      rateLimitedCall(() =>
+        client().messages.create({
+          model: HAIKU_MODEL,
+          max_tokens: 120,
+          system: NODE_SUMMARY_SYSTEM,
+          messages: [{ role: 'user', content: context }],
+        })
+      ),
     ]);
 
     const t = extractText(titleResp).replace(/^["'\s]+|["'\s]+$/g, '');
