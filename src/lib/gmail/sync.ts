@@ -37,12 +37,13 @@ export async function syncRecentEmails(
   let pageToken: string | undefined = undefined;
 
   do {
-    const res = await gmail.users.messages.list({
-      userId: 'me',
-      q: `newer_than:${days}d`,
-      pageToken,
-      maxResults: 100,
-    });
+    const res: { data: { messages?: Array<{ id?: string | null }>; nextPageToken?: string | null } } =
+      await gmail.users.messages.list({
+        userId: 'me',
+        q: `newer_than:${days}d`,
+        pageToken,
+        maxResults: 100,
+      });
     const msgs = res.data.messages ?? [];
     for (const m of msgs) if (m.id) ids.push(m.id);
     pageToken = res.data.nextPageToken ?? undefined;

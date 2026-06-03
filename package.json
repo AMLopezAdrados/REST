@@ -6,12 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "db:init": "node scripts/init-db.js"
+    "lint": "next lint"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
-    "better-sqlite3": "^11.5.0",
     "google-auth-library": "^9.14.2",
     "googleapis": "^144.0.0",
     "lucide-react": "^0.454.0",
@@ -22,7 +20,6 @@
     "zustand": "^5.0.1"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

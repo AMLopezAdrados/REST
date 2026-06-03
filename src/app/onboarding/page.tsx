@@ -10,6 +10,7 @@ export default function OnboardingPage() {
   const [step, setStep] = useState(0);
   const [syncProgress, setSyncProgress] = useState({ status: 'idle', total: 0, processed: 0 });
   const [loading, setLoading] = useState(false);
+  const [syncError, setSyncError] = useState(false);
 
   useEffect(() => {
     if (status === 'authenticated' && step < 3) {
@@ -21,14 +22,19 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (step === 3 && syncProgress.status !== 'idle') {
       const timer = setInterval(async () => {
-        const res = await fetch('/api/sync');
-        if (res.ok) {
-          const data = await res.json();
-          setSyncProgress(data);
-          if (data.status === 'done' || data.status === 'error') {
-            setStep(4);
-            clearInterval(timer);
+        try {
+          const res = await fetch('/api/sync');
+          if (res.ok) {
+            const data = await res.json();
+            setSyncProgress(data);
+            if (data.status === 'done' || data.status === 'error') {
+              if (data.status === 'error') setSyncError(true);
+              setStep(4);
+              clearInterval(timer);
+            }
           }
+        } catch {
+          // ignore transient polling errors; startSync handles terminal state
         }
       }, 1000);
       return () => clearInterval(timer);
@@ -37,15 +43,24 @@ export default function OnboardingPage() {
 
   const startSync = async () => {
     setLoading(true);
+    // Flip status off 'idle' so the progress poller starts immediately.
+    setSyncProgress((p) => ({ ...p, status: 'fetching' }));
     try {
       const res = await fetch('/api/sync', { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         setSyncProgress({ status: 'done', total: data.fetched, processed: data.fetched });
-        setStep(4);
+      } else {
+        console.error('Sync failed', res.status, await res.text().catch(() => ''));
+        setSyncError(true);
       }
     } catch (err) {
       console.error('Sync failed', err);
+      setSyncError(true);
+    } finally {
+      // Never leave the user stuck on the syncing screen.
+      setLoading(false);
+      setStep(4);
     }
   };
 
@@ -111,10 +126,22 @@ export default function OnboardingPage() {
           <div className="text-center space-y-6">
             <h2 className="text-sectionHeader font-bold text-navy">Welcome</h2>
             <div className="bg-white rounded-card p-6 space-y-4">
-              <p className="text-lg font-semibold text-textDark">Your inbox is quieter now.</p>
-              <p className="text-textMid">
-                {syncProgress.total} emails organized into topics. Ready to explore?
-              </p>
+              {syncError ? (
+                <>
+                  <p className="text-lg font-semibold text-textDark">You&apos;re all set.</p>
+                  <p className="text-textMid">
+                    We couldn&apos;t finish syncing just now, but you can head into the
+                    canvas — it&apos;ll fill in as syncing completes.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-lg font-semibold text-textDark">Your inbox is quieter now.</p>
+                  <p className="text-textMid">
+                    {syncProgress.total} emails organized into topics. Ready to explore?
+                  </p>
+                </>
+              )}
             </div>
             <button
               onClick={() => router.push('/canvas')}

@@ -22,7 +22,7 @@ export default function LedgerPage() {
   }, [status, router]);
 
   useEffect(() => {
-    async function fetch() {
+    async function loadEmails() {
       try {
         if (nodeId) {
           const res = await fetch('/api/nodes', {
@@ -45,7 +45,7 @@ export default function LedgerPage() {
         setLoading(false);
       }
     }
-    if (status === 'authenticated') fetch();
+    if (status === 'authenticated') loadEmails();
   }, [status, nodeId]);
 
   if (loading) {
